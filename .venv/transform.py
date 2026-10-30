@@ -38,8 +38,7 @@ COLUMN_MAP = {
     "fields.time": "time",
     "fields.eventType": "event_type",
     "fields.eventCategory": "event_category",
-    "fields.groupID": "group_id",
-    "fields.RSVP": "rsvp",
+    "fields.rsvp": "rsvp",
     "fields.description": "description",
     "fields.shortIntro": "short_intro",
 }
