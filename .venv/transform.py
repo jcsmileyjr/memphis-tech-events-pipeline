@@ -1,6 +1,7 @@
 """
 transform.py -- flatten the raw Contentful snapshot, trim it to the columns
-you care about, and report duplicate IDs and missing values.
+you care about, standardize event_type and event_category values, and report duplicate IDs and
+missing values.
 
 Run from the project root (same place you run extract.py):
     python src/transform.py            # transform the newest raw snapshot
@@ -35,11 +36,35 @@ COLUMN_MAP = {
     "fields.time": "time",
     "fields.eventType": "event_type",
     "fields.eventCategory": "event_category",
+    "fields.groupID": "group_id",
     "fields.RSVP": "rsvp",
     "fields.description": "description",
     "fields.shortIntro": "short_intro",
 }
 ID_COLUMN = "event_id"
+
+# Canonical eventType values. The lookup key is the raw value lowercased with
+# everything except letters removed, so "In-Person", "In Person" and "INPERSON"
+# all become "inperson" and map to the same canonical value.
+EVENT_TYPE_CANONICAL = {
+    "inperson": "In-Person",
+    "virtual": "Virtual",
+    "hybrid": "Hybrid",
+}
+
+# Canonical eventCategory values, same key rule as above.
+# "Tech TalkNetworking" is a known data-entry glitch (two categories run together);
+# it is deliberately mapped to "Tech Talk".
+EVENT_CATEGORY_CANONICAL = {
+    "networking": "Networking",
+    "techtalk": "Tech Talk",
+    "techtalknetworking": "Tech Talk",
+    "workshop": "Workshop",
+    "entrepreneur": "Entrepreneur",
+    "conference": "Conference",
+    "hackathon": "Hackathon",
+    "ai": "AI",
+}
 
 
 def latest_raw_file() -> Path:
@@ -61,6 +86,51 @@ def trim(df: pd.DataFrame) -> pd.DataFrame:
         log.warning("COLUMN_MAP references columns not in the data (skipped): %s", missing_sources)
     present = {src: dst for src, dst in COLUMN_MAP.items() if src in df.columns}
     return df[list(present)].rename(columns=present)
+
+
+def standardize_column(df: pd.DataFrame, column: str, canonical: dict) -> pd.DataFrame:
+    """Collapse spelling/case variants in `column` into the canonical values.
+
+    `canonical` maps a normalized key (lowercase, letters only) to the final value.
+    Unknown values are left unchanged and logged, never guessed at.
+    """
+    if column not in df.columns:
+        log.warning("%s column not found; skipping standardization", column)
+        return df
+
+    df = df.copy()
+    raw = df[column]
+    keys = raw.astype("string").str.lower().str.replace(r"[^a-z]", "", regex=True)
+    mapped = keys.map(canonical)
+
+    # Only overwrite where we recognized the value; keep everything else as-is
+    recognized = mapped.notna()
+    changed = recognized & (raw != mapped)
+    log.info("%s: standardized %s value(s)", column, int(changed.sum()))
+    df.loc[recognized, column] = mapped[recognized]
+
+    unknown = raw[~recognized & raw.notna()]
+    if not unknown.empty:
+        log.warning(
+            "%s: %s value(s) not in the canonical lookup (left unchanged): %s",
+            column,
+            len(unknown),
+            unknown.value_counts().to_dict(),
+        )
+    return df
+
+
+def check_allowed_values(df: pd.DataFrame, column: str, allowed: set) -> None:
+    """Log the final value counts for a column and flag anything outside the allowed set."""
+    if column not in df.columns:
+        return
+    counts = df[column].value_counts(dropna=False)
+    log.info("%s value counts: %s", column, counts.to_dict())
+    bad = df[~df[column].isin(allowed) & df[column].notna()]
+    if bad.empty:
+        log.info("%s: all values are in the allowed set", column)
+    else:
+        log.warning("%s: %s row(s) outside allowed set %s", column, len(bad), sorted(allowed))
 
 
 def report_quality(df: pd.DataFrame) -> None:
@@ -112,6 +182,10 @@ def main() -> None:
         return
 
     clean = trim(flat)
+    clean = standardize_column(clean, "event_type", EVENT_TYPE_CANONICAL)
+    clean = standardize_column(clean, "event_category", EVENT_CATEGORY_CANONICAL)
+    check_allowed_values(clean, "event_type", set(EVENT_TYPE_CANONICAL.values()))
+    check_allowed_values(clean, "event_category", set(EVENT_CATEGORY_CANONICAL.values()))
     report_quality(clean)
     out = save_clean(clean)
     log.info("Saved %s rows to %s", len(clean), out)
