@@ -1,6 +1,6 @@
 """
 transform.py -- flatten the raw Contentful snapshot, trim it to the columns
-you care about, standardize event_type and event_category values, and report duplicate IDs and
+you care about, standardize event_type, event_category and time values, and report duplicate IDs and
 missing values.
 
 Run from the project root (same place you run extract.py):
@@ -12,9 +12,11 @@ Workflow: run --inspect first, then edit COLUMN_MAP below to match your real fie
 
 import json
 import logging
+import re
 import sys
 from datetime import datetime
 from pathlib import Path
+from typing import Optional
 
 import pandas as pd
 
@@ -36,6 +38,7 @@ COLUMN_MAP = {
     "fields.time": "time",
     "fields.eventType": "event_type",
     "fields.eventCategory": "event_category",
+    "fields.groupID": "group_id",
     "fields.RSVP": "rsvp",
     "fields.description": "description",
     "fields.shortIntro": "short_intro",
@@ -119,6 +122,77 @@ def standardize_column(df: pd.DataFrame, column: str, canonical: dict) -> pd.Dat
     return df
 
 
+# Matches "18:00", "9:15", "0900", "1730", "4PM", "11 am", "4:30 PM"
+TIME_PATTERN = re.compile(r"^(\d{1,2}):?(\d{2})?\s*([ap]m)?$", re.IGNORECASE)
+
+
+def normalize_time(value) -> Optional[str]:
+    """Convert a messy time string to 24-hour 'HH:MM'. Returns None if it can't be parsed."""
+    if value is None or pd.isna(value):
+        return None
+    match = TIME_PATTERN.match(str(value).strip())
+    if not match:
+        return None
+
+    hour_text, minute_text, meridiem = match.groups()
+    # A bare number like "9" is ambiguous: require minutes or AM/PM
+    if minute_text is None and meridiem is None:
+        return None
+
+    hour = int(hour_text)
+    minute = int(minute_text) if minute_text else 0
+    if minute > 59:
+        return None
+
+    if meridiem:
+        if not 1 <= hour <= 12:
+            return None
+        hour = hour % 12 + (12 if meridiem.lower() == "pm" else 0)
+    elif hour > 23:
+        return None
+
+    return f"{hour:02d}:{minute:02d}"
+
+
+def standardize_time(df: pd.DataFrame, column: str = "time") -> pd.DataFrame:
+    """Normalize the time column to 'HH:MM'. Unparseable values are left unchanged and logged."""
+    if column not in df.columns:
+        log.warning("%s column not found; skipping standardization", column)
+        return df
+
+    df = df.copy()
+    raw = df[column]
+    parsed = raw.map(normalize_time)
+
+    recognized = parsed.notna()
+    changed = recognized & (raw != parsed)
+    log.info("%s: standardized %s value(s)", column, int(changed.sum()))
+    df.loc[recognized, column] = parsed[recognized]
+
+    unknown = raw[~recognized & raw.notna()]
+    if not unknown.empty:
+        log.warning(
+            "%s: %s value(s) could not be parsed (left unchanged): %s",
+            column,
+            len(unknown),
+            unknown.value_counts().to_dict(),
+        )
+    return df
+
+
+def check_time_format(df: pd.DataFrame, column: str = "time") -> None:
+    """Confirm every non-null time is in 'HH:MM' form and show the final distinct values."""
+    if column not in df.columns:
+        return
+    values = df[column].dropna()
+    bad = values[~values.astype(str).str.fullmatch(r"\d{2}:\d{2}")]
+    log.info("%s: %s distinct value(s) after cleaning", column, values.nunique())
+    if bad.empty:
+        log.info("%s: all values are in HH:MM format", column)
+    else:
+        log.warning("%s: %s value(s) not in HH:MM format: %s", column, len(bad), bad.unique().tolist())
+
+
 def check_allowed_values(df: pd.DataFrame, column: str, allowed: set) -> None:
     """Log the final value counts for a column and flag anything outside the allowed set."""
     if column not in df.columns:
@@ -183,6 +257,8 @@ def main() -> None:
     clean = trim(flat)
     clean = standardize_column(clean, "event_type", EVENT_TYPE_CANONICAL)
     clean = standardize_column(clean, "event_category", EVENT_CATEGORY_CANONICAL)
+    clean = standardize_time(clean, "time")
+    check_time_format(clean, "time")
     check_allowed_values(clean, "event_type", set(EVENT_TYPE_CANONICAL.values()))
     check_allowed_values(clean, "event_category", set(EVENT_CATEGORY_CANONICAL.values()))
     report_quality(clean)
