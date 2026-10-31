@@ -41,6 +41,7 @@ COLUMN_MAP = {
     "fields.rsvp": "rsvp",
     "fields.description": "description",
     "fields.shortIntro": "short_intro",
+    "fields.groupId": "group_id",
 }
 ID_COLUMN = "event_id"
 
