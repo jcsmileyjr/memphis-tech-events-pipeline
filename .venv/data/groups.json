@@ -1,0 +1,158 @@
+[
+    { 
+        "id": 1, 
+        "name": "Memphis Design and Code", 
+        "description": "Your hub for UI/UX design, software development, and tech innovation in the heart of Memphis. Join a thriving community of creators and builders." 
+    },
+    { 
+        "id": 2, 
+        "name": "Code Connector", 
+        "description": "Code Connector is a community-driven meetup group for people transitioning into the tech industry. Through regular workshops, coding sessions, and career-focused events, it helps members build technical skills, connect with industry peers, and discover opportunities in software development and technology. Based around the Memphis, TN area."
+        
+    },
+    { 
+        "id": 3, 
+        "name": "Doers and Thinkers", 
+        "description": "Thinkers & Doers is a Memphis-focused initiative that connects students and emerging professionals with small businesses and nonprofits through real-world data and AI projects. Led by founder DeNisha Malone and supported by an advisory board of data and analytics professionals, it offers mentorship and hands-on experience that help newcomers build practical skills while helping local organizations make better decisions with data."
+    },
+    { 
+        "id": 6, 
+        "name": "901AI", 
+        "description": "901AI is a FedEx Technology Institute initiative that brings together AI enthusiasts, professionals, and learners in the Memphis area."
+    },
+    { 
+        "id": 9, 
+        "name": "DevMemphis", 
+        "description": "DevMemphis is a community of developers, designers, and tech enthusiasts in the Memphis area."
+    },
+    { 
+        "id": 19, 
+        "name": "Memphis DotNet and Azure User Group", 
+        "description": "The Memphis DotNet and Azure User Group is a community of developers and IT professionals interested in Microsoft technologies, including .NET and Azure. "
+    },  
+    { 
+        "id": 20, 
+        "name": "Epicenter Memphis", 
+        "description": "Epicenter Memphis is a collaborative workspace and community hub for entrepreneurs, startups, and small businesses in the Memphis area. It provides resources, mentorship, and networking opportunities to help local innovators grow and succeed."
+    },    
+    { 
+        "id": 21, 
+        "name": "Memphis World Trade Club", 
+        "description": "The Memphis World Trade Club is a community of business professionals and entrepreneurs dedicated to promoting international trade and economic development in the Memphis area."
+    },    
+    { 
+        "id": 22, 
+        "name": "MemSEC", 
+        "description": "MemSEC is a Memphis-based cybersecurity community that brings together professionals, enthusiasts, and learners to share knowledge, best practices, and the latest trends in cybersecurity."
+    },       
+    { 
+        "id": 23, 
+        "name": "Socity of Entrepreneurs Memphis", 
+        "description": "The Society of Entrepreneurs Memphis is a community of business professionals and entrepreneurs dedicated to promoting entrepreneurship and economic development in the Memphis area."
+    },  
+    { 
+        "id": 24, 
+        "name": "ProTech Services Group", 
+        "description": "ProTech Services Group is a Memphis-based IT services and consulting company that provides technology solutions to businesses and organizations in the area."
+    },   
+    { 
+        "id": 25, 
+        "name": "Greater Memphis IT Council", 
+        "description": "The Greater Memphis IT Council is a community of IT professionals and businesses dedicated to promoting technology advancement and economic growth in the Memphis area."
+    },   
+    { 
+        "id": 26, 
+        "name": "Memphis Game Developers", 
+        "description": "The Memphis Game Developers is a community of game developers and enthusiasts in the Memphis area who come together to share knowledge, network, and collaborate on game development projects."
+    },       
+    { 
+        "id": 27, 
+        "name": "CodeCrew", 
+        "description": "The CodeCrew is a community of developers and programming enthusiasts in the Memphis area who come together to share knowledge, network, and collaborate on software development projects."
+    },          
+    { 
+        "id": 28, 
+        "name": "Tech on Tap with Lia", 
+        "description": "The Tech on Tap with Lia is a community of tech enthusiasts and professionals in the Memphis area who come together to share knowledge, network, and collaborate on software development projects."
+    },    
+    { 
+        "id": 29, 
+        "name": "Random Group", 
+        "description": "The Random Group"
+    },    
+    { 
+        "id": 30, 
+        "name": "MAGIC", 
+        "description": "MAGIC"
+    },       
+    { 
+        "id": 31, 
+        "name": "Innovate Memphis", 
+        "description": "Innovate Memphis"
+    },   
+    { 
+        "id": 32, 
+        "name": "PMI Memphis", 
+        "description": "PMI Memphis"
+    },         
+    { 
+        "id": 33, 
+        "name": "Memphis Python User Group", 
+        "description": "Memphis Python User Group"
+    },    
+    { 
+        "id": 34, 
+        "name": "Memphis AI & AR Meetup Group", 
+        "description": "Memphis AI & AR Meetup Group"
+    },     
+    { 
+        "id": 37, 
+        "name": "The Crews Center of Entrepreneurship", 
+        "description": "The Crews Center of Entrepreneurship"
+    },    
+    { 
+        "id": 35, 
+        "name": "Memphis AI Meetup Group", 
+        "description": "Memphis AI Meetup Group"
+    },    
+    { 
+        "id": 36, 
+        "name": "StartCo", 
+        "description": "StartCo"
+    },                                                      
+    {
+        "id": 4, 
+        "name": "Memphis Data Professionals",
+        "description": "Memphis Data Professionals is a community of data enthusiasts, professionals, and learners who come together to share knowledge, network, and explore the world of data science, analytics, and engineering. Through meetups, workshops, and collaborative projects, members enhance their skills and stay updated on the latest trends in the data industry."
+        
+    },
+    {
+        "id": 8, 
+        "name": "BDPA Memphis",
+        "description": "BDPA Memphis is a chapter of the Black Data Processing Associates (BDPA) organization, dedicated to promoting the growth and development of African Americans in the IT industry. Through networking events, workshops, and mentorship programs, BDPA Memphis aims to empower its members and foster a diverse and inclusive tech community."
+        
+    },
+    {
+        "id": 17, 
+        "name": "Tech901",
+        "sponsor": "Bronze Ally Sponsor",
+        "description": "Working with Memphis’ leading businesses, Tech901 is able to create quality IT training tailored to fit local hiring needs. Tech901’s unique structure pre-tests applicants for aptitude and alleviates common impediments to success (training cost, program length, and location). Today, highly qualified Tech901 grads are working in any number of organizations right here in the Memphis area."
+    },
+    {
+        "id": 5,
+        "name": "Memphis Technology Foundation",
+        "sponsor": "Bronze Ally Sponsor",
+        "description": "The Memphis Technology Foundation is dedicated to fostering innovation and growth in the tech community of Memphis. Through various initiatives, they aim to support local startups, provide resources for tech education, and promote collaboration among tech professionals."
+    },
+    {
+        "id": 7,
+        "name": "Germantown Career Support & Networking",
+        "description": "The Germantown Career Support & Networking group is a community-focused organization dedicated to helping professionals in the Memphis area advance their careers. Through regular networking events, workshops, and mentorship opportunities, the group aims to foster connections, share knowledge, and support career growth among its members."
+    },
+    {
+        "id": 18,
+        "name": "Midsouth Makers",
+        "description": "Midsouth Makers is a community of creators and innovators in the Memphis area. They focus on hands-on learning, collaboration, and sharing knowledge in various fields, including technology, art, and design."
+        
+    }
+]
