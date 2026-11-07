@@ -1,7 +1,8 @@
 """
 transform.py -- flatten the raw Contentful snapshot, trim it to the columns
-you care about, standardize event_type, event_category and time values, and report duplicate IDs and
-missing values.
+you care about, standardize event_type, event_category and time values,
+validate group_id against the reference groups file, and report duplicate IDs
+and missing values.
 
 Run from the project root (same place you run extract.py):
     python src/transform.py            # transform the newest raw snapshot
@@ -26,6 +27,10 @@ log = logging.getLogger("transform")
 RAW_DIR = Path("data/raw")
 CLEAN_DIR = Path("data/clean")
 
+# Reference list of groups: a JSON array of {"id": 9, "name": "...", "description": "...", ...}.
+# It is the source for the dim_group table; here it is only used to validate event group IDs.
+GROUPS_FILE = Path("data/reference/groups.json")
+
 # Left side: the column name json_normalize produces (see --inspect output).
 # Right side: the name you want in your clean dataset.
 # These field names are GUESSES from your project notes. Edit them to match your space.
@@ -38,10 +43,9 @@ COLUMN_MAP = {
     "fields.time": "time",
     "fields.eventType": "event_type",
     "fields.eventCategory": "event_category",
-    "fields.rsvp": "rsvp",
+    "fields.groupID": "group_id",
     "fields.description": "description",
     "fields.shortIntro": "short_intro",
-    "fields.groupId": "group_id",
 }
 ID_COLUMN = "event_id"
 
@@ -193,6 +197,93 @@ def check_time_format(df: pd.DataFrame, column: str = "time") -> None:
         log.warning("%s: %s value(s) not in HH:MM format: %s", column, len(bad), bad.unique().tolist())
 
 
+def load_groups(path: Path = GROUPS_FILE) -> Optional[pd.DataFrame]:
+    """Load and sanity-check the reference groups file. Returns None if it is unusable."""
+    if not path.exists():
+        log.warning("Groups file not found at %s; skipping group_id validation", path)
+        return None
+    with path.open(encoding="utf-8") as f:
+        groups = pd.DataFrame(json.load(f))
+
+    missing_cols = [c for c in ("id", "name") if c not in groups.columns]
+    if missing_cols:
+        log.warning("Groups file is missing required field(s) %s; skipping validation", missing_cols)
+        return None
+    if groups["id"].duplicated().any():
+        dupes = groups.loc[groups["id"].duplicated(keep=False), "id"].unique().tolist()
+        log.warning("Groups file has duplicate id(s): %s", dupes)
+    log.info("Loaded %s reference group(s) from %s", len(groups), path)
+    return groups
+
+
+def standardize_group_id(df: pd.DataFrame, column: str = "group_id") -> pd.DataFrame:
+    """Make group_id a nullable whole number.
+
+    Without this, pandas turns an integer column that has gaps into decimals
+    (9 -> 9.0), which would break joins to dim_group. Values that cannot be read
+    as a whole number are set to null and logged, never guessed.
+    """
+    if column not in df.columns:
+        log.warning("%s column not found; skipping standardization", column)
+        return df
+
+    df = df.copy()
+    raw = df[column].replace(r"^\s*$", pd.NA, regex=True)  # blank strings count as missing
+    numeric = pd.to_numeric(raw, errors="coerce")
+
+    not_numeric = raw.notna() & numeric.isna()
+    not_whole = numeric.notna() & (numeric % 1 != 0)
+    if not_numeric.any():
+        log.warning("%s: %s non-numeric value(s) set to null: %s",
+                    column, int(not_numeric.sum()), raw[not_numeric].value_counts().to_dict())
+    if not_whole.any():
+        log.warning("%s: %s non-whole value(s) set to null: %s",
+                    column, int(not_whole.sum()), numeric[not_whole].value_counts().to_dict())
+
+    numeric = numeric.where(~not_whole)
+    df[column] = numeric.astype("Int64")
+    return df
+
+
+def check_group_ids(df: pd.DataFrame, groups: Optional[pd.DataFrame], column: str = "group_id") -> None:
+    """Flag event group IDs that are not in the reference list and report group coverage."""
+    if column not in df.columns:
+        return
+
+    has_group = df[column].notna()
+    total = len(df)
+    pct = has_group.sum() / total * 100 if total else 0
+    log.info("%s: present on %s of %s events (%.1f%%)", column, int(has_group.sum()), total, pct)
+
+    # Which part of the timeline has group data?
+    if "date" in df.columns:
+        dates = pd.to_datetime(df["date"], errors="coerce")
+        if dates.notna().any() and has_group.any():
+            all_months = dates.dropna().dt.to_period("M")
+            span = (all_months.max() - all_months.min()).n + 1
+            grouped_dates = dates[has_group].dropna()
+            grouped_months = grouped_dates.dt.to_period("M").nunique()
+            log.info("%s: events with a group fall in %s of %s months (%s to %s)",
+                     column, grouped_months, span,
+                     grouped_dates.min().date(), grouped_dates.max().date())
+
+    if groups is None:
+        return
+
+    known = set(groups["id"].tolist())
+    unknown = df.loc[has_group & ~df[column].isin(known), column]
+    if unknown.empty:
+        log.info("%s: all values exist in the reference groups list", column)
+    else:
+        log.warning("%s: %s event(s) reference an ID not in the groups list: %s",
+                    column, len(unknown),
+                    {int(k): int(v) for k, v in unknown.value_counts().items()})
+
+    unused = sorted(known - set(df.loc[has_group, column].tolist()))
+    if unused:
+        log.info("Reference groups with no events: %s of %s (ids %s)", len(unused), len(known), unused)
+
+
 def check_allowed_values(df: pd.DataFrame, column: str, allowed: set) -> None:
     """Log the final value counts for a column and flag anything outside the allowed set."""
     if column not in df.columns:
@@ -259,6 +350,8 @@ def main() -> None:
     clean = standardize_column(clean, "event_category", EVENT_CATEGORY_CANONICAL)
     clean = standardize_time(clean, "time")
     check_time_format(clean, "time")
+    clean = standardize_group_id(clean, "group_id")
+    check_group_ids(clean, load_groups(), "group_id")
     check_allowed_values(clean, "event_type", set(EVENT_TYPE_CANONICAL.values()))
     check_allowed_values(clean, "event_category", set(EVENT_CATEGORY_CANONICAL.values()))
     report_quality(clean)
