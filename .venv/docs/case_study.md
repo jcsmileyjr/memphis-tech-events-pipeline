@@ -1,12 +1,14 @@
-# Memphis Events Pipeline: From a Newsletter CMS to a Queryable Warehouse
+# Memphis Events Pipeline: From a Newsletter CMS to a Queryable Warehouse, API, and Dashboard
 
-> **Draft status:** Everything below comes from work done so far (extract, transform, schema, SQL, loader). Numbers marked as measured were checked against the data files. Items marked **[TODO]** need results or words only you have: the database load results and your own voice in "How I worked" and "What I learned". The API layer is not built yet, so this draft stops at the loaded warehouse.
+> **Draft status:** Updated to cover the full project: extract, transform, schema, load, read-only API, and dashboard. Numbers marked as measured were checked against the data files.
 
 ## Summary
 
-I turned about 15 months of Memphis tech event listings (September 2025 through December 2026, including upcoming events), stored in a publishing CMS, into a clean, queryable PostgreSQL warehouse. A Python pipeline pulls the events from Contentful, cleans inconsistent values, and loads them into a star schema. The loader is designed so that re-running it never creates duplicates. The next layer is a small read-only FastAPI service on top.
+I turned about 15 months of Memphis tech event listings (September 2025 through December 2026, including upcoming events), stored in a publishing CMS, into a clean, queryable PostgreSQL warehouse with a read-only API and a dashboard on top. A Python pipeline pulls the events from Contentful, cleans inconsistent values, and loads them into a star schema. The loader is designed so that re-running it never creates duplicates. A small FastAPI service serves the data through a database user that can only read, and a Next.js dashboard answers four questions about the Memphis tech event scene.
 
-**Stack:** Python (requests, pandas, psycopg2), Contentful Content Delivery API, PostgreSQL, SQL (star schema).
+![Dashboard screenshot](images/dashboard.png)
+
+**Stack:** Python (requests, pandas, psycopg2), Contentful Content Delivery API, PostgreSQL, SQL (star schema), FastAPI, Pydantic, Next.js 16, React 19, TypeScript, Tailwind CSS, Recharts.
 
 ## The problem
 
@@ -16,7 +18,7 @@ The Memphis Tech Scene newsletter publishes community events every week. Those e
 - **Nothing enforced consistency.** Fields were free text, so the same value was typed several ways.
 - **Awkward shape.** The API returns nested JSON with linked entries, not rows and columns.
 
-**Goal:** make the event history queryable, trustworthy, and ready to serve through an API.
+**Goal:** make the event history queryable, trustworthy, and visible: clean data in a warehouse, served through an API, and shown in a dashboard.
 
 ## Architecture
 
@@ -28,10 +30,11 @@ flowchart LR
     D --> E[(data/clean<br/>clean JSON)]
     E --> F[load.py<br/>dimensions first, then facts]
     F --> G[(PostgreSQL<br/>star schema)]
-    G -.next.-> H[FastAPI<br/>read-only API]
+    G --> H[FastAPI<br/>read-only DB user]
+    H --> I[Next.js dashboard]
 ```
 
-Each stage has one job and writes its output to disk, so any stage can be re-run without repeating the ones before it.
+Each stage has one job and writes its output to disk or the database, so any stage can be re-run without repeating the ones before it.
 
 ## Key decisions and trade-offs
 
@@ -50,6 +53,11 @@ Each stage has one job and writes its output to disk, so any stage can be re-run
 | Registration links not stored | The source field is a URL (or `TBD`), an address and not a countable measure. Nothing in the questions needs it | The API can't link out to registration pages |
 | Event details (name, description, intro) on the fact table | One row per event, so a separate event dimension would add a join and a second key for no analytical gain | A wider fact table than textbook |
 | Compute month, weekday and hour in queries | They can be derived from the date and time, and stored copies could drift. Only the `dim_date` key is stored | Slightly longer queries |
+| API connects as a database user with `SELECT` only | Even a bug or a bad request can't change the warehouse | A separate user and password to set up |
+| API built around the dashboard's four questions, not a general events API | The dashboard is the only consumer, so the endpoints return summaries (events per month, category, hour, trending) and a small event shape, not every field | Not a general-purpose events API |
+| "Trending" means what organizers are focused on: event counts by group and by category over a recent window | There are no RSVP numbers, so popularity can't be measured. Counts in the last N days (default 90) show where organizers put their effort | Reflects supply of events, not attendance |
+| Dashboard fetches the API from the server (Next.js Server Components) | The browser never calls the API, so there is no CORS setup and the API address stays server-side | The dashboard needs the API running to render |
+| Next.js dashboard instead of Power BI | I tried Power BI first and didn't get on with the workflow. A Next.js app keeps the dashboard in code I can version, review, and run with the rest of the project | More front-end code to write than dragging visuals onto a canvas |
 
 ## What the data looked like
 
@@ -82,8 +90,6 @@ Star schema, one fact table with four dimensions. Grain: one row per event, keye
 - Which categories dominate? (fact joined to `dim_event_category`)
 - Which groups are most active, shown with coverage? (fact joined to `dim_group`, catch-all excluded)
 - What time of day do events usually happen? (hour taken from `event_time`)
-- API needs: events by month, events by category, one event by ID, upcoming events, and a recency-based "featured" list built without RSVP data.
-
 
 ```mermaid
 erDiagram
@@ -136,48 +142,73 @@ erDiagram
 
 `dim_date` is a calendar and never needs a daily update. It is seeded once through 2035, and the loader adds days if an event ever falls past the seeded range.
 
+## The API
+
+A read-only FastAPI service sits on top of the warehouse. It connects with a database user that has `SELECT` access only, validates responses with Pydantic, and serves interactive documentation at `/docs`.
+
+| Endpoint | Returns |
+|---|---|
+| `GET /events` | Events, 100 per page, newest first, with optional month and category filters |
+| `GET /events/{event_id}` | One event |
+| `GET /stats/events-per-month` | Event counts per month, with empty months filled in as zero |
+| `GET /stats/events-per-category` | All-time counts per category |
+| `GET /stats/events-per-hour` | Counts by start hour. Events with no time are left out and counted separately |
+| `GET /trending/groups` | Most active groups in a recent window (default 90 days, 1 to 730), with coverage figures. The catch-all is excluded |
+| `GET /trending/categories` | Most common categories in the same window |
+| `GET /health` | Confirms the API can reach the database |
+
+I kept the event shape small on purpose: name, date, type, category, group name, and event ID. The dashboard is the only consumer, and it doesn't need more.
+
+## The dashboard
+
+A Next.js app with one page. A Server Component fetches from the API on the server and passes the data to Recharts chart components, so the browser never calls the API directly. Each chart is titled with the question it answers, handles its own error and empty states, and carries a short note about its data limits, such as group coverage and events excluded for having no start time.
+
+The four questions: how many events happen per month, which categories dominate, which groups are most active, and what time of day events start.
+
 ## Problems I hit and how I solved them
 
 - **401 from Contentful.** The Space ID loaded correctly, so I suspected the credentials, not the request. The cause was the wrong token type: the Content Delivery API only accepts its own token. Lesson: when the URL is right, test credentials in isolation.
 - **`ModuleNotFoundError: pandas`.** The package was installed in a different Python environment than the one running the script. Fixed by activating the virtual environment first, then saving `requirements.txt`.
-- **Project layout.** The scripts and `data/` folders live inside the `.venv` folder, which is meant for installed packages, and the docstrings still say `src/`. I decided to leave it as it is. **[TODO: say whether you plan to fix this later.]**
+- **Project layout.** The scripts and `data/` folders live inside the `.venv` folder, which I left as is for now.
 - **Group IDs becoming decimals.** pandas turns an integer column with gaps into floats (9 becomes 9.0), which would break the join to the group table. I converted it to a nullable integer type, and the loader converts it to a plain whole number before writing.
 - **My assumptions didn't match the data.** The project brief said 435 entries, history from October 2024, and group data for only a few months. The latest file has 440 entries from September 2025, and every event has a group ID (40 of them the catch-all). I profiled the file before designing, so the design followed the data and not the brief.
-- **`updated_at` is useless for "recently changed".** 298 of 440 rows share one date (a bulk edit on 2026-11-01), so I based the recency idea on `created_at` instead.
-- **Database connection.** `psql` was installed but not on the PATH, and the first connection failed with a password authentication error for the `postgres` user. **[TODO: say what fixed it.]**
-- **[TODO: any problems from running `create_tables.sql` or `load.py`.]**
+- **`updated_at` is useless for "recently changed".** 298 of 440 rows share one date (a bulk edit on 2026-11-01), so I based recency on `created_at` instead.
+- **Power BI.** I planned to build the dashboard in Power BI because it would add to my toolset, but the workflow didn't suit me. I switched to a Next.js dashboard on the API I had already built.
+- **Database connection.** `psql` was installed but not on the PATH, and the first connection failed with a password authentication error for the `postgres` user. 
 
 ## Results
 
-The loader and the SQL script are written. I checked the loader's validation against the real file with a dry run: 440 rows read, 440 valid, 0 rejected. The database half has not been checked by me.
+I checked the loader's validation against the real file with a dry run: 440 rows read, 440 valid, 0 rejected. The data then loaded into PostgreSQL, the API runs against it, and the dashboard renders all four charts from the API (screenshot at the top).
 
-- Loaded **[TODO: row counts per table]** into PostgreSQL. Expected, from the design: `dim_event_type` 3, `dim_event_category` 7, `dim_group` 30, `dim_date` 3,774, `fact_events` 440.
-- **[TODO: re-run result. Run the loader twice. The first run should insert 440 events and the second should insert 0 and update 440, with `fact_events` staying at 440.]**
-- **[TODO: one or two example queries and their results.]** For reference, the clean file gives these numbers, which the queries should match:
-  - **Categories:** Networking 221, Tech Talk 100, Workshop 44, Entrepreneur 42, Conference 20, Hackathon 9, AI 4.
+- What the warehouse shows, as served by the API:
+  - **Event types:** In-Person 356, Virtual 69, Hybrid 15.
+  - **Categories:** Networking (221), Tech Talk (100), Workshop (44), Entrepreneur (42), Conference (20), Hackathon (9), AI (4).
   - **Events per month:** peaks at 45 in April 2026; September 2025, November 2026 and December 2026 are partial months.
-  - **Top groups (catch-all excluded):** Midsouth Makers 52, Memphis AI Meetup Group 38, CodeCrew 31, Code Connector 31.
+  - **Top groups (catch-all excluded):** Midsouth Makers (52), Memphis AI Meetup Group (38), CodeCrew (31), Code Connector (31).
 
 ## Limitations and what's next
 
-- No RSVP or engagement counts exist in the source, so engagement analysis isn't supported. Without them, "trending" has to be defined by recency (upcoming events, newest first) and not by popularity.
-- 9.1% of events have no real group, so any group ranking should show its coverage.
+- **Data freshness.** The API serves whatever was last loaded. Changes in Contentful appear only after I run the pipeline again, and nothing is scheduled.
+- No RSVP or engagement counts exist in the source, so engagement analysis isn't supported. "Trending" shows where organizers are putting their events, not what attendees choose.
+- 9.1% of events have no real group, so any group ranking should show its coverage. Most events are labeled Networking even when some are AI-focused, so the category chart understates AI.
 - The data starts in September 2025, so earlier trends can't be answered.
 - Only a start time is stored, with no end time, venue or address.
 - Removed events are flagged, not deleted. None of the three snapshots on disk shows a removal, so that path is untested on real data. Contentful's Sync API handles deletions explicitly and would also make loads incremental.
-- The read-only FastAPI layer and scheduled runs are next.
+- The API and dashboard run locally only. There are no automated tests yet.
+- **Next:** a script that runs the pipeline every Friday night, and a Power BI report on the same warehouse alongside the Next.js dashboard.
 
 ## How I worked
 
-I designed first, then directed AI tools, then reviewed the output. I defined the questions and schema decisions, used Claude Code to profile the data, draft the design doc, and write the SQL and loader, and checked the results against my own audit counts. The decisions below were mine, some of them overriding or correcting the draft:
+I designed first, then directed AI tools, then reviewed the output. I defined the questions and schema decisions, used Claude Code to profile the data, draft the design docs, and write the SQL, loader, API, and dashboard, and checked the results against my own audit counts. The decisions below were mine, some of them overriding or correcting the draft:
 
 - I decided RSVP stays out of scope and rejected storing the registration link as a column.
 - I told the assistant that "Random Group" is a catch-all, not a real organization, which changed how group data is modeled and ranked.
 - I fixed the `23:59` placeholder at the source instead of letting the loader hide it.
 - I chose to keep `dim_date`, to reuse the source's group IDs as keys, to compute derived columns in queries, and to flag removed events instead of deleting them.
 - I confirmed the three repeated name-and-date pairs are separate events, so no deduplication rule was added.
+- I defined what "trending" means for this data, and kept the API to the fields the dashboard needs instead of exposing everything.
+- I dropped Power BI for a Next.js dashboard after trying it.
 
-**[TODO: in your own words, one or two sentences on what you caught or rejected in the AI output, and how you verified the loader was correct. This is the strongest interview talking point.]**
 
 ## What I learned
 
@@ -185,4 +216,4 @@ I designed first, then directed AI tools, then reviewed the output. I defined th
 - Keep the raw layer untouched. It made every later fix cheap.
 - A column you can't populate shouldn't be in the schema. Removing RSVP kept the design honest.
 - Profile the real file before designing. Three assumptions in the brief (the row count, the start date and sparse group data) were wrong, and finding that out early was cheap.
-- **[TODO: one thing you'd do differently.]**
+- **What I'd do differently:** schedule the pipeline from the start, with a script that runs it every Friday night so the warehouse stays current without me running each step by hand. I'd also add a Power BI report on the same warehouse next to the Next.js dashboard.
