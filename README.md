@@ -2,7 +2,7 @@
 
 A data pipeline, PostgreSQL warehouse, read-only API, and dashboard built on real Memphis tech event data from the [Memphis Tech Scene](https://memphistechscene.com) newsletter.
 
-![Dashboard screenshot](docs/images/dashboard.png)
+![Dashboard screenshot](./dashboard.png)
 
 ## What it does
 
