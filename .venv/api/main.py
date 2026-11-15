@@ -11,7 +11,9 @@ from fastapi import Depends, FastAPI, HTTPException, Query
 
 from api import db
 from api.models import (
+    CategoryCount,
     Event,
+    EventsPerHour,
     EventPage,
     Health,
     MonthCount,
@@ -52,6 +54,16 @@ def get_event(event_id: str, conn=Depends(db.get_conn)):
 @app.get("/stats/events-per-month", response_model=list[MonthCount])
 def events_per_month(conn=Depends(db.get_conn)):
     return db.events_per_month(conn)
+
+
+@app.get("/stats/events-per-category", response_model=list[CategoryCount])
+def events_per_category(conn=Depends(db.get_conn)):
+    return db.events_per_category(conn)
+
+
+@app.get("/stats/events-per-hour", response_model=EventsPerHour)
+def events_per_hour(conn=Depends(db.get_conn)):
+    return db.events_per_hour(conn)
 
 
 @app.get("/trending/groups", response_model=TrendingGroups)

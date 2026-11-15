@@ -109,6 +109,50 @@ gaps. Months are derived from `event_date`. Not paginated.
 ]
 ```
 
+### `GET /stats/events-per-category`
+
+All-time event count per category, highest first (ties by name). No window, so it
+always covers every event, unlike `/trending/categories`. Categories with no
+events are included with 0. Not paginated.
+
+```json
+[
+  {"event_category": "Networking", "event_count": 221},
+  {"event_category": "Tech Talk", "event_count": 100},
+  {"event_category": "Workshop", "event_count": 44},
+  "... 4 more categories, down to AI with 4 ..."
+]
+```
+
+### `GET /stats/events-per-hour`
+
+Events by local start hour (`hour` 0–23, the Memphis wall-clock time stored in
+`fact_events.event_time`). Events with no time (`NULL`) and events at the `23:59`
+placeholder time are excluded from `items`; their counts are reported so a
+dashboard can say so. Hours between the first and last hour that has events are
+included with 0, so a chart has no gaps.
+
+`events_with_time = events_total - excluded_no_time - excluded_placeholder`.
+
+```json
+{
+  "events_total": 440,
+  "events_with_time": 440,
+  "excluded_no_time": 0,
+  "excluded_placeholder": 0,
+  "items": [
+    {"hour": 7, "event_count": 3},
+    {"hour": 8, "event_count": 17},
+    "... hours 9–19 ...",
+    {"hour": 18, "event_count": 87},
+    {"hour": 20, "event_count": 1}
+  ]
+}
+```
+
+(Real data as of 2026-11-15: 14 hours, 07:00 to 20:00; busiest hour is 18:00 with
+87 events.)
+
 ### `GET /trending/groups?days=90&limit=10`
 
 Groups ranked by number of events in the window, highest first (ties broken by
@@ -196,7 +240,12 @@ password placeholder. Even if the API had a bug, the database would refuse write
   `events_with_group` vs `events_in_window` to see coverage.
 - No RSVP or attendance data exists in the warehouse, so none is served and
   "trending" means number of events only.
-- Only a few fields per event are returned; there is no description or time.
+- Only a few fields per event are returned; there is no description or time on
+  individual events. Time of day is only available aggregated, via
+  `/stats/events-per-hour`.
+- The trending endpoints are windowed (`days` max 730). Today 730 days reaches back
+  before the first event, but from about 2027-09 it will start cutting off the
+  oldest events; use `/stats/events-per-category` for all-time category totals.
 - CORS is not enabled. A browser dashboard served from a different origin (another
   port, e.g. `localhost:3000` or `5173`) would be blocked by the browser until
   `CORSMiddleware` is added with that origin allowed. A server-side dashboard or

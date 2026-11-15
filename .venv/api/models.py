@@ -53,3 +53,16 @@ class TrendingCategories(BaseModel):
 class Health(BaseModel):
     status: str
     database: str
+
+
+class HourCount(BaseModel):
+    hour: int  # 0-23, local Memphis start hour
+    event_count: int
+
+
+class EventsPerHour(BaseModel):
+    events_total: int
+    events_with_time: int
+    excluded_no_time: int
+    excluded_placeholder: int  # events at the 23:59 placeholder time
+    items: list[HourCount]

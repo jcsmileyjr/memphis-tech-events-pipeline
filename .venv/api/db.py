@@ -213,3 +213,58 @@ def trending_categories(conn, days: int, limit: int) -> dict:
         (days, limit),
     )
     return {"window_days": days, **totals, "items": items}
+
+
+def events_per_category(conn) -> list[dict]:
+    """All-time event count per category, highest first (no window)."""
+    return _fetch_all(
+        conn,
+        """
+        SELECT c.event_category_name AS event_category, count(f.event_id)::int AS event_count
+        FROM dim_event_category c
+        LEFT JOIN fact_events f ON f.event_category_id = c.event_category_id
+        GROUP BY c.event_category_id, c.event_category_name
+        ORDER BY event_count DESC, c.event_category_name
+        """,
+    )
+
+
+# Start time that means "unknown" rather than a real 11:59 PM event.
+PLACEHOLDER_TIME = "23:59"
+
+
+def events_per_hour(conn) -> dict:
+    """Events per local start hour, excluding NULL times and the 23:59 placeholder."""
+    totals = _fetch_one(
+        conn,
+        """
+        SELECT count(*)::int                                          AS events_total,
+               (count(*) FILTER (WHERE event_time IS NULL))::int      AS excluded_no_time,
+               (count(*) FILTER (WHERE event_time = %s::time))::int   AS excluded_placeholder
+        FROM fact_events
+        """,
+        (PLACEHOLDER_TIME,),
+    )
+    items = _fetch_all(
+        conn,
+        """
+        WITH usable AS (
+            SELECT EXTRACT(hour FROM event_time)::int AS hour
+            FROM fact_events
+            WHERE event_time IS NOT NULL AND event_time <> %s::time
+        ),
+        bounds AS (SELECT min(hour) AS first_hour, max(hour) AS last_hour FROM usable),
+        hours AS (SELECT generate_series(first_hour, last_hour) AS hour FROM bounds)
+        SELECT h.hour, count(u.hour)::int AS event_count
+        FROM hours h
+        LEFT JOIN usable u ON u.hour = h.hour
+        GROUP BY h.hour
+        ORDER BY h.hour
+        """,
+        (PLACEHOLDER_TIME,),
+    )
+    return {
+        **totals,
+        "events_with_time": totals["events_total"] - totals["excluded_no_time"] - totals["excluded_placeholder"],
+        "items": items,
+    }
