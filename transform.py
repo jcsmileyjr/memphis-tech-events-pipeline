@@ -5,8 +5,8 @@ validate group_id against the reference groups file, and report duplicate IDs
 and missing values.
 
 Run from the project root (same place you run extract.py):
-    python src/transform.py            # transform the newest raw snapshot
-    python src/transform.py --inspect  # just print every column json_normalize finds
+    python transform.py            # transform the newest raw snapshot
+    python transform.py --inspect  # just print every column json_normalize finds
 
 Workflow: run --inspect first, then edit COLUMN_MAP below to match your real fields.
 """

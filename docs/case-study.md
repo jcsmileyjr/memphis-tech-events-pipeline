@@ -169,7 +169,7 @@ The four questions: how many events happen per month, which categories dominate,
 
 - **401 from Contentful.** The Space ID loaded correctly, so I suspected the credentials, not the request. The cause was the wrong token type: the Content Delivery API only accepts its own token. Lesson: when the URL is right, test credentials in isolation.
 - **`ModuleNotFoundError: pandas`.** The package was installed in a different Python environment than the one running the script. Fixed by activating the virtual environment first, then saving `requirements.txt`.
-- **Project layout.** The scripts and `data/` folders live inside the `.venv` folder, which I left as is for now.
+- **Project layout.** The scripts and `data/` folders originally lived inside the `.venv` folder. I later moved everything to the repository root and kept `.venv/` for the virtual environment only.
 - **Group IDs becoming decimals.** pandas turns an integer column with gaps into floats (9 becomes 9.0), which would break the join to the group table. I converted it to a nullable integer type, and the loader converts it to a plain whole number before writing.
 - **My assumptions didn't match the data.** The project brief said 435 entries, history from October 2024, and group data for only a few months. The latest file has 440 entries from September 2025, and every event has a group ID (40 of them the catch-all). I profiled the file before designing, so the design followed the data and not the brief.
 - **`updated_at` is useless for "recently changed".** 298 of 440 rows share one date (a bulk edit on 2026-11-01), so I based recency on `created_at` instead.

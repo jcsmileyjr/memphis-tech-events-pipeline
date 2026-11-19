@@ -123,10 +123,10 @@ A single-page Next.js app. A Server Component fetches from the API on the server
 
 ## Project structure
 
-All project files currently live in a folder named `.venv/` at the repository root. Every command below is run from inside that folder.
+Everything lives at the repository root. Run every command below from the root.
 
 ```
-.venv/
+.
 ├── extract.py            Contentful → data/raw
 ├── transform.py          data/raw → data/clean
 ├── load.py               data/clean → PostgreSQL
@@ -148,14 +148,13 @@ All project files currently live in a folder named `.venv/` at the repository ro
 
 **Prerequisites:** Python 3.13, Node 22, PostgreSQL (developed on 18), and a Contentful space with a Content Delivery API token. The extract step needs access to that space, so you cannot reproduce the data without it.
 
-1. **Install Python dependencies.** Work from inside the `.venv/` project folder and create a separate virtual environment there named `venv`:
+1. **Install Python dependencies.** From the repository root, create a virtual environment named `.venv`:
    ```
-   cd .venv
-   python -m venv venv
-   venv\Scripts\activate         # macOS/Linux: source venv/bin/activate
+   python -m venv .venv
+   .venv\Scripts\activate         # macOS/Linux: source .venv/bin/activate
    pip install -r requirements.txt
    ```
-2. **Configure environment variables.** Copy `.env.example` to `.env` (inside `.venv/`) and fill in the values.
+2. **Configure environment variables.** Copy `.env.example` to `.env` in the repository root and fill in the values.
 
    | Used by | Variables |
    |---|---|
@@ -199,7 +198,7 @@ All project files currently live in a folder named `.venv/` at the repository ro
 - [Schema design](docs/schema-design.md)
 - [API design](docs/api-design.md)
 - [Dashboard design](docs/dashboard-design.md)
-- [Case study](docs/case_study.md)
+- [Case study](docs/case-study.md)
 
 ## About
 

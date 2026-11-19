@@ -14,7 +14,7 @@ Model the cleaned Memphis Tech Scene event data as a small star schema in Postgr
 In scope: one fact table (`fact_events`) and its dimensions, the keys and constraints, and the load/upsert rules.
 Out of scope: RSVP (see section 9), SQL scripts, loader code, API design.
 
-Where the repo lives: the pipeline scripts and `data/` folders currently sit inside the `.venv` directory of the checkout (e.g. `.venv/transform.py`, `.venv/data/clean/`), not under `src/` as the transform docstring says. This doc lives at `docs/` next to them. Paths below are relative to that folder.
+Where the repo lives: the pipeline scripts (`extract.py`, `transform.py`, `load.py`) and the `data/`, `sql/`, `api/` and `docs/` folders sit at the repository root. Paths below are relative to the repo root.
 
 ---
 
@@ -90,15 +90,15 @@ A question is "supported" when the tables can answer it, regardless of how it is
 
 | # | Question | Who asks | Columns / joins needed | How it could be presented | Caveats |
 |---|---|---|---|---|---|
-| 1 | How many events happen per month? | Community members; organizers; dashboard viewers | `fact_events.date_key` join `dim_date` (`year`, `month`, `month_start`) ; `COUNT(*)` grouped by month | Dashboard: monthly bar/line tile. API: `GET /events/by-month` | Only 2025-09 to 2026-12 exists. First (2025-09) and last (2026-11, 2026-12) months are partial or future. Counts by event date, not by creation date. |
-| 2 | Which event categories dominate? | Organizers; sponsors | `fact_events.event_category_id` join `dim_event_category`; `COUNT(*)` | Dashboard: ranked bar. API: `GET /events/by-category` | Current split: Networking 221 of 440 (50.2%). AI has only 4 events, so shares for small categories are noisy. Category is single-valued per event (a cleaning rule collapsed "Tech TalkNetworking" into Tech Talk). |
-| 3 | Which groups are most active? | Group organizers; community members | `fact_events.group_id` join `dim_group`; `COUNT(*)` where `dim_group.is_catch_all = false` | Dashboard: top-N bar plus a coverage note. API: `GET /groups` with event counts | Scope the query to events that have a group and return coverage alongside (events with group / total events). Today 440 / 440 events carry a `group_id`, but 40 of them are the catch-all (Random Group, id 29), so real-group coverage is 400 / 440 (90.9%). Catch-all events fall in 11 of the 16 months. "Random Group" (id 29, 40 events) is confirmed as a catch-all for events with no real group, so exclude it from rankings and report coverage as real-group events / total: 400 / 440 (90.9%). |
-| 4 | What time of day do events usually happen? | Attendees planning their week; organizers scheduling | `fact_events.event_time` (derive hour in the query or a stored column); exclude NULL times | Dashboard: histogram by hour or bucket. API: optional `GET /events/by-hour` (not required) | The single `23:59` placeholder in earlier extracts was corrected at the source to 17:00, so no exclusion is needed today; queries should still ignore NULL times. Times are local Memphis wall-clock times with no time zone. Start time only; there is no end time or duration in the data. |
-| 5a | Events by month (API) | API consumers | Same as Q1 | `GET /events/by-month` | Same as Q1 |
-| 5b | Events by category (API) | API consumers | Same as Q2 | `GET /events/by-category` | Same as Q2 |
+| 1 | How many events happen per month? | Community members; organizers; dashboard viewers | `fact_events.date_key` join `dim_date` (`year`, `month`, `month_start`) ; `COUNT(*)` grouped by month | Dashboard: monthly bar/line tile. API: `GET /stats/events-per-month` | Only 2025-09 to 2026-12 exists. First (2025-09) and last (2026-11, 2026-12) months are partial or future. Counts by event date, not by creation date. |
+| 2 | Which event categories dominate? | Organizers; sponsors | `fact_events.event_category_id` join `dim_event_category`; `COUNT(*)` | Dashboard: ranked bar. API: `GET /stats/events-per-category` | Current split: Networking 221 of 440 (50.2%). AI has only 4 events, so shares for small categories are noisy. Category is single-valued per event (a cleaning rule collapsed "Tech TalkNetworking" into Tech Talk). |
+| 3 | Which groups are most active? | Group organizers; community members | `fact_events.group_id` join `dim_group`; `COUNT(*)` where `dim_group.is_catch_all = false` | Dashboard: top-N bar plus a coverage note. API: `GET /trending/groups` | Scope the query to events that have a group and return coverage alongside (events with group / total events). Today 440 / 440 events carry a `group_id`, but 40 of them are the catch-all (Random Group, id 29), so real-group coverage is 400 / 440 (90.9%). Catch-all events fall in 11 of the 16 months. "Random Group" (id 29, 40 events) is confirmed as a catch-all for events with no real group, so exclude it from rankings and report coverage as real-group events / total: 400 / 440 (90.9%). |
+| 4 | What time of day do events usually happen? | Attendees planning their week; organizers scheduling | `fact_events.event_time` (derive hour in the query or a stored column); exclude NULL times | Dashboard: histogram by hour or bucket. API: optional `GET /stats/events-per-hour` | The single `23:59` placeholder in earlier extracts was corrected at the source to 17:00, so no exclusion is needed today; queries should still ignore NULL times. Times are local Memphis wall-clock times with no time zone. Start time only; there is no end time or duration in the data. |
+| 5a | Events by month (API) | API consumers | Same as Q1 | `GET /stats/events-per-month` | Same as Q1 |
+| 5b | Events by category (API) | API consumers | Same as Q2 | `GET /stats/events-per-category` | Same as Q2 |
 | 5c | One event by ID (API) | API consumers; drill-down | `fact_events` by `event_id`, join `dim_event_type`, `dim_event_category`, `dim_group` | `GET /events/{event_id}` | Returns 404 for unknown IDs; `event_id` is Contentful's `sys.id` (a string, not an integer). |
-| 5d | Upcoming events (API) | Attendees | `fact_events.event_date >= current_date in America/Chicago`, order by `event_date`, `event_time` | `GET /events/upcoming` | Today (2026-11-07) 16 events are upcoming. Rows with NULL time sort last within a day. "Today" must be computed in America/Chicago, not UTC. |
-| 5e | "Trending" events (no RSVP) | Attendees | See proposal below | `GET /events/trending` (name TBD) | **Decision for you.** Without RSVP, popularity cannot be measured. |
+| 5d | Upcoming events (API) | Attendees | `fact_events.event_date >= current_date in America/Chicago`, order by `event_date`, `event_time` | not implemented (proposed `GET /events/upcoming`) | Today (2026-11-07) 16 events are upcoming. Rows with NULL time sort last within a day. "Today" must be computed in America/Chicago, not UTC. |
+| 5e | "Trending" events (no RSVP) | Attendees | See proposal below | `GET /trending/groups` and `GET /trending/categories` | **Decision for you.** Without RSVP, popularity cannot be measured. |
 | 6 | Filters and drill-down: month/quarter, category, event details | Dashboard viewers; API consumers | `dim_date` (`year`, `quarter`, `month`), `dim_event_category.category_name`, `fact_events.name`, `description`, `short_intro` | Dashboard: filter controls and detail panel. API: query params `?month=2026-03`, `?quarter=2026-Q1`, `?category=Workshop` | Details live on the fact table (one row per event, text attributes) rather than a separate dimension; see section 8.4. |
 
 **Proposed definition of "trending" (decision for you, not made here).** No RSVP, attendance, view or click data exists, so "trending" can only mean something about recency. Candidates:
@@ -350,7 +350,7 @@ Not done, by decision: you confirmed the 3 pairs are separate events. `event_id`
 - **Repeated (name, date) pairs**: 3 pairs share a name and date with different `event_id`s. Confirmed as separate events, so all are loaded and counted. Do not treat them as duplicates when comparing distinct names (259) with rows (440).
 - **`updated_at` is unreliable for recency** (298 rows share 2026-11-01).
 - **The extract is a point-in-time snapshot.** Entries deleted or unpublished in Contentful are flagged `is_active = false` by the loader, not removed (see section 10). None of the three raw snapshots on disk (2026-10-29, 11-01, 11-07) shows a removal, so the flag is untested on real data.
-- The `.venv` folder holds the pipeline code; decided to leave it there. `sql/` and `src/load.py` will follow the same layout.
+- The project now lives at the repository root (the earlier `.venv/` layout was changed); `sql/` and `load.py` sit beside the other scripts.
 
 ---
 
@@ -411,4 +411,4 @@ Not done, by decision: you confirmed the 3 pairs are separate events. `event_id`
 10. ~~Deletions~~ **Decided:** flag with `is_active = false`; never hard-delete.
 11. ~~Time zone~~ **Decided:** all event times, including virtual events, are Central time (America/Chicago).
 12. ~~Scope of history~~ **Explained:** many events were recorded in another system and then ported into Contentful, so Contentful's earliest event date (2025-09-05) reflects the migration, not the project's start. Earlier events live in the other system and are not in this warehouse. Whether to import them later is a separate decision, not part of this schema.
-13. ~~Project layout~~ **Decided:** leave the project in `.venv/`.
+13. ~~Project layout~~ **Decided:** project files live at the repository root; the virtual environment is a separate `.venv/`.
