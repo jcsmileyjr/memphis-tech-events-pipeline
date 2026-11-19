@@ -10,7 +10,7 @@ Event listings for the Memphis Tech Scene newsletter live in Contentful, a CMS b
 
 - **Extracts** every event from the Contentful Content Delivery API into a dated raw snapshot.
 - **Cleans** inconsistent values (spelling, casing, time formats) and validates group IDs against a reference list.
-- **Loads** the result into a PostgreSQL star schema with re-runnable upserts.
+- **Loads** the result into a PostgreSQL star schema (hosted on Supabase) with re-runnable upserts.
 - **Serves** summary statistics through a read-only FastAPI service.
 - **Displays** the answers in a Next.js dashboard.
 
@@ -25,36 +25,37 @@ flowchart LR
     C --> D[transform.py<br/>flatten, standardize, validate]
     D --> E[(data/clean<br/>clean JSON)]
     E --> F[load.py<br/>dimensions first, then facts]
-    F --> G[(PostgreSQL<br/>star schema)]
+    F --> G[(PostgreSQL<br/>star schema, hosted on Supabase)]
     G --> H[FastAPI<br/>read-only user]
     H --> I[Next.js dashboard]
 ```
 
 Each stage writes its output to disk or the database, so any stage can be re-run without repeating the ones before it. The raw snapshot is never edited after it is written.
 
-**Stack:** Python 3.13 (pandas, psycopg2, FastAPI, Pydantic, Uvicorn) · PostgreSQL 18 · Next.js 16 with React 19, TypeScript, Tailwind CSS, and Recharts.
+**Stack:** Python 3.13 (pandas, psycopg2, FastAPI, Pydantic, Uvicorn) · PostgreSQL (developed locally on 18, now hosted on Supabase) · Next.js 16 with React 19, TypeScript, Tailwind CSS, and Recharts.
 
 ## Key numbers
 
-From the loaded warehouse:
+From the warehouse after the 2026-11-19 load:
 
 | | |
 |---|---|
-| Events | 440 (2025-09-05 to 2026-12-02, including upcoming events) |
-| Event types | In-Person 356 · Virtual 69 · Hybrid 15 |
-| Categories | Networking 221 · Tech Talk 100 · Workshop 44 · Entrepreneur 42 · Conference 20 · Hackathon 9 · AI 4 |
-| Groups | 30 in the reference list; 400 of 440 events (90.9%) have a real group |
+| Events | 450 (2025-09-05 to 2026-12-10, including upcoming events) |
+| Event types | In-Person 364 · Virtual 70 · Hybrid 16 |
+| Categories | Networking 180 · Tech Talk 109 · Workshop 46 · Entrepreneur 44 · AI 39 · Conference 22 · Hackathon 10 |
+| Groups | 30 in the reference list; 410 of 450 events (91.1%) have a real group |
 | Duplicate event IDs | 0 |
+| Re-run check | Loading the same file twice: 450 inserted, then 0 inserted and 450 updated; the row count stayed at 450 |
 
 ### Data quality fixes
 
 Before writing any cleaning rule, I counted every distinct value per field. The transform then collapses spelling variants with a lookup table, and flags anything unrecognized instead of guessing.
 
-| Field | Distinct values before → after | Rows corrected |
-|---|---|---|
-| Event type | 6 → 3 | 38 |
-| Event category | 9 → 7 | 2 |
-| Start time | 40 → 30 | 17 |
+| Field | First audit (435 events): distinct values before → after | Rows corrected, first audit | Rows corrected, latest run (450 events) |
+|---|---|---|---|
+| Event type | 6 → 3 | 38 | 39 |
+| Event category | 9 → 7 | 2 | 1 |
+| Start time | 41 → 30 | 17 | 18 |
 
 Examples: "In Person" and "INPERSON" became "In-Person"; "4PM" and "0900" became `16:00` and `09:00`.
 
@@ -98,7 +99,7 @@ Key design decisions (full reasoning in [docs/schema-design.md](docs/schema-desi
 
 `load.py` loads everything in one transaction, in dependency order: groups, event types and categories, dates, then events.
 
-- Events are upserted on `event_id`, so re-running updates existing rows instead of duplicating them.
+- Events are upserted on `event_id`, so re-running updates existing rows instead of duplicating them. This was checked against the hosted database: the first run inserted 450 events, and a second run of the same file inserted 0 and updated 450.
 - Events absent from the new snapshot are flagged inactive. The load refuses to do this if the snapshot contains fewer than half of the currently active events, which guards against a bad extract wiping out the table.
 - Rows with missing required fields or an unrecognized type or category are logged and skipped.
 
@@ -146,7 +147,7 @@ Everything lives at the repository root. Run every command below from the root.
 
 ## Getting started
 
-**Prerequisites:** Python 3.13, Node 22, PostgreSQL (developed on 18), and a Contentful space with a Content Delivery API token. The extract step needs access to that space, so you cannot reproduce the data without it.
+**Prerequisites:** Python 3.13, Node 22, a PostgreSQL database (a local install works, and so does a hosted one such as Supabase), and a Contentful space with a Content Delivery API token. The extract step needs access to that space, so you cannot reproduce the data without it.
 
 1. **Install Python dependencies.** From the repository root, create a virtual environment named `.venv`:
    ```
@@ -162,7 +163,7 @@ Everything lives at the repository root. Run every command below from the root.
    | `load.py` | `DATABASE_URL` (or standard libpq `PG*` variables) |
    | API | `API_DB_HOST`, `API_DB_PORT`, `API_DB_NAME`, `API_DB_USER`, `API_DB_PASSWORD` |
 
-3. **Create an empty PostgreSQL database** and point `DATABASE_URL` at it.
+3. **Create an empty PostgreSQL database** and point `DATABASE_URL` at it. With Supabase, use the **session pooler** connection string from the project's Connect panel (it works over IPv4, unlike the direct address, which may not). The pooler username includes the project reference, for example `postgres.<project-ref>`.
 4. **Run the pipeline**
    ```
    python extract.py          # writes data/raw/events_YYYY-MM-DD.json
@@ -170,7 +171,7 @@ Everything lives at the repository root. Run every command below from the root.
    python load.py --init      # first run: creates tables, then loads
    ```
    After the first run, use `python load.py`. Use `--dry-run` to validate without connecting to the database, or `--file PATH` to load a specific file.
-5. **Create the read-only API user.** Replace the `CHANGE_ME` password in `sql/create_api_user.sql`, run it as the `postgres` user (for example in pgAdmin), then put those credentials in `.env`.
+5. **Create the read-only API user.** Replace the `CHANGE_ME` password in `sql/create_api_user.sql` and run it as an admin user (pgAdmin for a local database, or the SQL editor on Supabase). Then put the credentials in `.env`. On the Supabase pooler, the username is `api_reader.<project-ref>`.
 6. **Start the API**
    ```
    uvicorn api.main:app --reload
@@ -188,9 +189,11 @@ Everything lives at the repository root. Run every command below from the root.
 ## Limitations
 
 - **The API serves whatever was last loaded.** Changes in Contentful appear only after the pipeline runs again. Nothing is scheduled yet.
-- **Group data depends on the source.** 40 of 440 events (9.1%) have no group and sit in the catch-all, which the trending-groups results exclude.
+- **Group data depends on the source.** 40 of 450 events (8.9%) have no group and sit in the catch-all, which the trending-groups results exclude.
+- **Each event has one category,** so an event that is both a networking event and AI-focused is counted once.
 - **No RSVP or engagement data.** The source does not contain counts.
 - **A re-created Contentful entry gets a new ID.** The old row is flagged inactive and the new one is inserted as a separate event.
+- **The API and dashboard run locally** against the hosted database. They are not deployed.
 - **No automated tests yet.**
 
 ## Documentation

@@ -1,14 +1,12 @@
 # Memphis Events Pipeline: From a Newsletter CMS to a Queryable Warehouse, API, and Dashboard
 
-> **Draft status:** Updated to cover the full project: extract, transform, schema, load, read-only API, and dashboard. Numbers marked as measured were checked against the data files.
-
 ## Summary
 
-I turned about 15 months of Memphis tech event listings (September 2025 through December 2026, including upcoming events), stored in a publishing CMS, into a clean, queryable PostgreSQL warehouse with a read-only API and a dashboard on top. A Python pipeline pulls the events from Contentful, cleans inconsistent values, and loads them into a star schema. The loader is designed so that re-running it never creates duplicates. A small FastAPI service serves the data through a database user that can only read, and a Next.js dashboard answers four questions about the Memphis tech event scene.
+I turned about 16 months of Memphis tech event listings (September 2025 through December 2026, including upcoming events), stored in a publishing CMS, into a clean, queryable PostgreSQL warehouse with a read-only API and a dashboard on top. A Python pipeline pulls the events from Contentful, cleans inconsistent values, and loads them into a star schema hosted on Supabase. Loading the same file twice leaves the row count unchanged: the first run inserted 450 events, and the second inserted none and updated 450. A small FastAPI service serves the data through a database user that can only read, and a Next.js dashboard answers four questions about the Memphis tech event scene.
 
 ![Dashboard screenshot](images/dashboard.png)
 
-**Stack:** Python (requests, pandas, psycopg2), Contentful Content Delivery API, PostgreSQL, SQL (star schema), FastAPI, Pydantic, Next.js 16, React 19, TypeScript, Tailwind CSS, Recharts.
+**Stack:** Python (requests, pandas, psycopg2), Contentful Content Delivery API, PostgreSQL (hosted on Supabase), SQL (star schema), FastAPI, Pydantic, Next.js 16, React 19, TypeScript, Tailwind CSS, Recharts.
 
 ## The problem
 
@@ -29,7 +27,7 @@ flowchart LR
     C --> D[transform.py<br/>flatten, standardize, validate]
     D --> E[(data/clean<br/>clean JSON)]
     E --> F[load.py<br/>dimensions first, then facts]
-    F --> G[(PostgreSQL<br/>star schema)]
+    F --> G[(PostgreSQL<br/>star schema, hosted on Supabase)]
     G --> H[FastAPI<br/>read-only DB user]
     H --> I[Next.js dashboard]
 ```
@@ -58,18 +56,20 @@ Each stage has one job and writes its output to disk or the database, so any sta
 | "Trending" means what organizers are focused on: event counts by group and by category over a recent window | There are no RSVP numbers, so popularity can't be measured. Counts in the last N days (default 90) show where organizers put their effort | Reflects supply of events, not attendance |
 | Dashboard fetches the API from the server (Next.js Server Components) | The browser never calls the API, so there is no CORS setup and the API address stays server-side | The dashboard needs the API running to render |
 | Next.js dashboard instead of Power BI | I tried Power BI first and didn't get on with the workflow. A Next.js app keeps the dashboard in code I can version, review, and run with the rest of the project | More front-end code to write than dragging visuals onto a canvas |
+| Hosted Postgres (Supabase) instead of only a local database | A scheduled job can't reach a database on my laptop, and a hosted one is a step toward running the pipeline automatically | A free tier has limits, and the connection details (pooler, credentials) need care |
 
 ## What the data looked like
 
-I audited the entries by counting the exact string values per field before writing any cleaning rules. The first audit covered 435 entries (the 2026-10-29 snapshot); the latest snapshot has 440. All counts in this section were re-checked against the files.
+I audited the entries by counting the exact string values per field before writing any cleaning rules. The first audit covered 435 entries (the 2026-10-29 snapshot). The latest snapshot (2026-11-19) has 450. Counts below are from the first audit unless a bullet says "latest".
 
-- **Event type (attendance format):** 6 distinct values where there should be 3. "In Person" (36 rows), "INPERSON" (1), and "VIRTUAL" (1) were variants of "In-Person" and "Virtual". **38 of 435 rows (about 9%)** needed fixing.
-- **Event category:** 9 distinct values where there should be 7. "WORKSHOP" and "Tech TalkNetworking" (two categories run together) were the errors. I mapped the second to "Tech Talk", which is a judgment call I documented. 2 rows needed fixing.
-- **Time:** 41 distinct values in mixed formats: `18:00`, `9:15`, `0900`, `1730`, and `4PM`/`11AM`. I normalized them to 24-hour `HH:MM`. **17 rows changed** and every value parsed, leaving 30 distinct values in the latest clean file. One value, `23:59`, looked like a placeholder, not a real start time (1 event, a virtual entrepreneur event on 2026-09-21). I corrected it in Contentful to 17:00, so the pipeline needs no special rule. Older snapshots still contain the `23:59`.
-- **Groups:** event groups come from a reference list of 30 community groups. In the latest file every event has a group ID, all 30 groups are used, and every ID exists in the reference list. But 40 events (9.1%) use "Random Group", the source's catch-all for events with no group, so **400 of 440 events (90.9%) have a real group**, spread across all 16 months. Earlier I had expected group data to be sparse. That was wrong for this file, and I only found out by measuring it. An earlier clean file had no group column at all, so loading it would put every event in the catch-all.
-- **RSVP:** the RSVP field is a link, not a count (424 URLs and 16 `TBD` out of 440), so engagement analytics weren't possible. I removed RSVP-based questions from the design instead of building on data that doesn't exist, and I decided not to carry the link as a column.
+- **Event type (attendance format):** 6 distinct values where there should be 3. "In Person" (36 rows), "INPERSON" (1), and "VIRTUAL" (1) were variants of "In-Person" and "Virtual". **38 of 435 rows (about 9%)** needed fixing. The latest run standardized 39 values.
+- **Event category:** 9 distinct values where there should be 7. "WORKSHOP" and "Tech TalkNetworking" (two categories run together) were the errors. I mapped the second to "Tech Talk", which is a judgment call I documented. 2 rows needed fixing. The latest run standardized 1 value.
+- **Time:** 41 distinct values in mixed formats: `18:00`, `9:15`, `0900`, `1730`, and `4PM`/`11AM`. I normalized them to 24-hour `HH:MM`. **17 rows changed** and every value parsed, leaving 30 distinct values. The latest run changed 18 rows and also leaves 30 distinct values, all in `HH:MM` format, with no event missing a time. One value, `23:59`, looked like a placeholder, not a real start time (1 event, a virtual entrepreneur event on 2026-09-21). I corrected it in Contentful to 17:00, so the pipeline needs no special rule. Older snapshots still contain the `23:59`.
+- **Groups (latest):** event groups come from a reference list of 30 community groups. In the latest file every event has a group ID, all 30 groups are used, and every ID exists in the reference list. But 40 events (8.9%) use "Random Group", the source's catch-all for events with no group, so **410 of 450 events (91.1%) have a real group**, spread across all 16 months. Earlier I had expected group data to be sparse. That was wrong for this file, and I only found out by measuring it. An earlier clean file had no group column at all, so loading it would put every event in the catch-all.
+- **Categories (latest):** in the first audit only 4 events were labeled AI, even though more of the events were AI-focused. I relabeled AI-focused events at the source in Contentful, and the latest run shows 39 AI events (Networking fell from 221 to 180).
+- **RSVP:** in the 440-entry snapshot I audited, the RSVP field was a link, not a count (424 URLs and 16 `TBD`), so engagement analytics weren't possible. I removed RSVP-based questions from the design instead of building on data that doesn't exist, and I decided not to carry the link as a column.
 - **History:** the earliest event is 2025-09-05. Many events were recorded in another system and ported into Contentful, so earlier history is not in this warehouse.
-- **Repeated names:** 3 pairs of events share a name and date but have different IDs (for example, "Midsouth Makers Weekly Friday Open House" on 2025-10-03). I checked them, confirmed they are separate events, and kept all of them.
+- **Repeated names:** in the first audit, 3 pairs of events shared a name and date but had different IDs (for example, "Midsouth Makers Weekly Friday Open House" on 2025-10-03). I checked them, confirmed they are separate events, and kept all of them.
 
 **Root cause:** these were free-text fields. Converting them to dropdowns or validated fields in Contentful would stop new bad values at the source. The pipeline stays defensive either way.
 
@@ -79,7 +79,7 @@ Star schema, one fact table with four dimensions. Grain: one row per event, keye
 
 | Table | Rows | Key | Purpose |
 |---|---|---|---|
-| `fact_events` | one per event (440 in the latest file) | `event_id` (text) | Event, its date and time, type, category, group, name, description, intro, timestamps, `is_active` |
+| `fact_events` | one per event (450 in the latest load) | `event_id` (text) | Event, its date and time, type, category, group, name, description, intro, timestamps, `is_active` |
 | `dim_event_type` | 3 | `event_type_id` | In-Person, Virtual, Hybrid |
 | `dim_event_category` | 7 | `event_category_id` | Networking, Tech Talk, Workshop, Entrepreneur, Conference, Hackathon, AI |
 | `dim_group` | 30 | `group_id` (the source ID) | Community groups, with the `is_catch_all` flag |
@@ -171,31 +171,43 @@ The four questions: how many events happen per month, which categories dominate,
 - **`ModuleNotFoundError: pandas`.** The package was installed in a different Python environment than the one running the script. Fixed by activating the virtual environment first, then saving `requirements.txt`.
 - **Project layout.** The scripts and `data/` folders originally lived inside the `.venv` folder. I later moved everything to the repository root and kept `.venv/` for the virtual environment only.
 - **Group IDs becoming decimals.** pandas turns an integer column with gaps into floats (9 becomes 9.0), which would break the join to the group table. I converted it to a nullable integer type, and the loader converts it to a plain whole number before writing.
-- **My assumptions didn't match the data.** The project brief said 435 entries, history from October 2024, and group data for only a few months. The latest file has 440 entries from September 2025, and every event has a group ID (40 of them the catch-all). I profiled the file before designing, so the design followed the data and not the brief.
-- **`updated_at` is useless for "recently changed".** 298 of 440 rows share one date (a bulk edit on 2026-11-01), so I based recency on `created_at` instead.
+- **My assumptions didn't match the data.** The project brief said 435 entries, history from October 2024, and group data for only a few months. The data had more than 440 entries from September 2025, and every event had a group ID (40 of them the catch-all). I profiled the file before designing, so the design followed the data and not the brief.
+- **`updated_at` is useless for "recently changed".** In the 440-event snapshot, 298 of 440 rows shared one date (a bulk edit on 2026-11-01), so I based recency on `created_at` instead.
 - **Power BI.** I planned to build the dashboard in Power BI because it would add to my toolset, but the workflow didn't suit me. I switched to a Next.js dashboard on the API I had already built.
-- **Database connection.** `psql` was installed but not on the PATH, and the first connection failed with a password authentication error for the `postgres` user. 
+- **Database connection.** `psql` was installed but not on the PATH, and the first connection to my local database failed with a password authentication error for the `postgres` user.
+- **Supabase connection string.** Supabase offers a direct connection and a pooled one. I used the session pooler, which needs a username that includes the project reference (`postgres.<project-ref>`), because the direct address may not be reachable from IPv4-only networks such as GitHub Actions runners. The read-only API user follows the same pattern (`api_reader.<project-ref>`).
 
 ## Results
 
-I checked the loader's validation against the real file with a dry run: 440 rows read, 440 valid, 0 rejected. The data then loaded into PostgreSQL, the API runs against it, and the dashboard renders all four charts from the API (screenshot at the top).
+I checked the loader's validation against the real file with a dry run, then loaded the data into a hosted PostgreSQL database on Supabase. The API runs against it, and the dashboard renders all four charts from the API (screenshot at the top).
 
-- What the warehouse shows, as served by the API:
-  - **Event types:** In-Person 356, Virtual 69, Hybrid 15.
-  - **Categories:** Networking (221), Tech Talk (100), Workshop (44), Entrepreneur (42), Conference (20), Hackathon (9), AI (4).
-  - **Events per month:** peaks at 45 in April 2026; September 2025, November 2026 and December 2026 are partial months.
-  - **Top groups (catch-all excluded):** Midsouth Makers (52), Memphis AI Meetup Group (38), CodeCrew (31), Code Connector (31).
+**Row counts after the load:** `fact_events` 450, `dim_group` 30, `dim_event_type` 3, `dim_event_category` 7, `dim_date` 3,774.
+
+**Re-run test.** I ran the loader twice on the same clean file (450 rows, 0 rejected):
+
+| Run | `fact_events` result | Deactivated |
+|---|---|---|
+| First (`--init`) | 450 inserted, 0 updated | 0 |
+| Second | 0 inserted, 450 updated | 0 |
+
+The event count stayed at 450, so the upsert on the event ID prevents duplicates.
+
+**What the warehouse shows**, queried from the database:
+- **Event types:** In-Person 364, Virtual 70, Hybrid 16.
+- **Categories:** Networking 180, Tech Talk 109, Workshop 46, Entrepreneur 44, AI 39, Conference 22, Hackathon 10.
+- **Events per month:** peaks at 45 in April 2026; September 2025 is a partial first month, and November and December 2026 include upcoming events.
+- **Top groups (catch-all excluded):** Midsouth Makers 54, Memphis AI Meetup Group 38, CodeCrew 32, Code Connector 32, Epicenter Memphis 22.
 
 ## Limitations and what's next
 
 - **Data freshness.** The API serves whatever was last loaded. Changes in Contentful appear only after I run the pipeline again, and nothing is scheduled.
 - No RSVP or engagement counts exist in the source, so engagement analysis isn't supported. "Trending" shows where organizers are putting their events, not what attendees choose.
-- 9.1% of events have no real group, so any group ranking should show its coverage. Most events are labeled Networking even when some are AI-focused, so the category chart understates AI.
+- 8.9% of events have no real group, so any group ranking should show its coverage. Each event has a single category, so an event that is both networking and AI-focused is counted once.
 - The data starts in September 2025, so earlier trends can't be answered.
 - Only a start time is stored, with no end time, venue or address.
-- Removed events are flagged, not deleted. None of the three snapshots on disk shows a removal, so that path is untested on real data. Contentful's Sync API handles deletions explicitly and would also make loads incremental.
-- The API and dashboard run locally only. There are no automated tests yet.
-- **Next:** a script that runs the pipeline every Friday night, and a Power BI report on the same warehouse alongside the Next.js dashboard.
+- Removed events are flagged, not deleted. None of the snapshots on disk shows a removal, so that path is untested on real data. Contentful's Sync API handles deletions explicitly and would also make loads incremental.
+- The API and dashboard run locally against the hosted database. There are no automated tests yet.
+- **Next:** a scheduled GitHub Actions workflow that runs the pipeline every Friday night, pipeline tests and logging, a Docker image, and a Power BI report on the same warehouse alongside the Next.js dashboard.
 
 ## How I worked
 
@@ -208,7 +220,8 @@ I designed first, then directed AI tools, then reviewed the output. I defined th
 - I confirmed the three repeated name-and-date pairs are separate events, so no deduplication rule was added.
 - I defined what "trending" means for this data, and kept the API to the fields the dashboard needs instead of exposing everything.
 - I dropped Power BI for a Next.js dashboard after trying it.
-
+- I relabeled AI-focused events at the source in Contentful instead of guessing at labels in the pipeline.
+- I ran the load twice against the hosted database to check the re-run behavior myself, instead of relying on the design.
 
 ## What I learned
 
@@ -216,4 +229,5 @@ I designed first, then directed AI tools, then reviewed the output. I defined th
 - Keep the raw layer untouched. It made every later fix cheap.
 - A column you can't populate shouldn't be in the schema. Removing RSVP kept the design honest.
 - Profile the real file before designing. Three assumptions in the brief (the row count, the start date and sparse group data) were wrong, and finding that out early was cheap.
+- Test the second run, not just the first. A design that says "re-runnable" proves little until the same file loaded twice leaves the row count unchanged.
 - **What I'd do differently:** schedule the pipeline from the start, with a script that runs it every Friday night so the warehouse stays current without me running each step by hand. I'd also add a Power BI report on the same warehouse next to the Next.js dashboard.
