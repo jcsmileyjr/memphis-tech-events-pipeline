@@ -1,0 +1,67 @@
+[
+  {
+    "event_id": "fixture-evt-1",
+    "created_at": "2026-09-01T12:00:00.000Z",
+    "updated_at": "2026-09-02T12:00:00.000Z",
+    "name": "Fixture Event 1",
+    "date": "2026-10-01",
+    "time": "18:00",
+    "event_type": "In-Person",
+    "event_category": "Networking",
+    "group_id": 9,
+    "description": "Made-up description 1",
+    "short_intro": "Made-up intro 1"
+  },
+  {
+    "event_id": "fixture-evt-2",
+    "created_at": "2026-09-01T12:00:00.000Z",
+    "updated_at": "2026-09-02T12:00:00.000Z",
+    "name": "Fixture Event 2",
+    "date": "2026-10-02",
+    "time": null,
+    "event_type": "Virtual",
+    "event_category": "Tech Talk",
+    "group_id": 1,
+    "description": null,
+    "short_intro": null
+  },
+  {
+    "event_id": "fixture-evt-3",
+    "created_at": "2026-09-01T12:00:00.000Z",
+    "updated_at": "2026-09-02T12:00:00.000Z",
+    "name": "Fixture Event 3",
+    "date": "2026-10-03",
+    "time": "09:00",
+    "event_type": "Hybrid",
+    "event_category": "Workshop",
+    "group_id": null,
+    "description": "Made-up description 3",
+    "short_intro": null
+  },
+  {
+    "event_id": "fixture-evt-4",
+    "created_at": "2026-09-01T12:00:00.000Z",
+    "updated_at": "2026-09-02T12:00:00.000Z",
+    "name": "Fixture Event 4",
+    "date": "2026-10-04",
+    "time": "16:30",
+    "event_type": "Virtual",
+    "event_category": "AI",
+    "group_id": 2,
+    "description": null,
+    "short_intro": "Made-up intro 4"
+  },
+  {
+    "event_id": "fixture-evt-5",
+    "created_at": "2026-09-01T12:00:00.000Z",
+    "updated_at": "2026-09-02T12:00:00.000Z",
+    "name": "Fixture Event 5",
+    "date": "2026-10-05",
+    "time": "10:15",
+    "event_type": "In-Person",
+    "event_category": "Hackathon",
+    "group_id": 3,
+    "description": null,
+    "short_intro": null
+  }
+]

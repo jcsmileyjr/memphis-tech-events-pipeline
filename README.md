@@ -194,7 +194,25 @@ Everything lives at the repository root. Run every command below from the root.
 - **No RSVP or engagement data.** The source does not contain counts.
 - **A re-created Contentful entry gets a new ID.** The old row is flagged inactive and the new one is inserted as a separate event.
 - **The API and dashboard run locally** against the hosted database. They are not deployed.
-- **No automated tests yet.**
+- **Tests cover the pipeline only.** A small pytest suite covers the cleaning rules, the loader's validation and guards, and re-run behavior against a local database. The API and dashboard have no automated tests, and nothing runs the suite automatically yet.
+
+## Running the tests
+
+Install the test dependencies, then run everything that needs no database (no secrets or network):
+
+```powershell
+pip install -r requirements-dev.txt
+python -m pytest
+```
+
+The database tests load a tiny fixture file into a throwaway schema and drop it afterwards. They are skipped unless `TEST_DATABASE_URL` is set. Create an empty local database (for example `memphis_test`), then:
+
+```powershell
+$env:TEST_DATABASE_URL = "postgresql://postgres:<password>@localhost:5432/memphis_test"
+python -m pytest -m db
+```
+
+They never use `DATABASE_URL`, and they refuse to run if the URL's host is not localhost, 127.0.0.1 or ::1, or if it contains "supabase".
 
 ## Documentation
 

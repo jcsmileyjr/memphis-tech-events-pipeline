@@ -1,0 +1,4 @@
+# Test tooling. Install on top of the runtime dependencies:
+#   pip install -r requirements-dev.txt
+-r requirements.txt
+pytest==9.2.0
