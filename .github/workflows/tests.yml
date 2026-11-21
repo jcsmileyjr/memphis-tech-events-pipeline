@@ -1,0 +1,71 @@
+name: Tests
+
+# Runs the test suite on every push and pull request.
+# SECURITY: this workflow uses NO repository secrets. Pull requests from forks run with
+# a read-only token and no secrets, and the database it uses is a throwaway container
+# that exists only for this job. (pull_request, never pull_request_target.)
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+# A newer push to the same branch makes the older run pointless; nothing here writes
+# to a real database, so cancelling is safe.
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres   # throwaway container, reachable only from this job
+          POSTGRES_DB: memphis_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d memphis_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+
+      - name: Install dependencies
+        run: python -m pip install -r requirements-dev.txt
+
+      - name: Tests that need no database
+        run: python -m pytest -m "not db" -v
+
+      # The db fixture in tests/conftest.py refuses any host except localhost / 127.0.0.1 / ::1
+      # and anything containing "supabase", and it never reads DATABASE_URL.
+      - name: Database tests (throwaway Postgres service)
+        shell: bash   # explicit bash turns on pipefail, so a pytest failure is not hidden by tee
+        env:
+          TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/memphis_test
+        run: |
+          python -m pytest -m db -v 2>&1 | tee db-tests.log
+          # A skipped database test would look green but prove nothing.
+          if grep -qi "skipped" db-tests.log; then
+            echo "::error::Database tests were skipped; TEST_DATABASE_URL was not picked up."
+            exit 1
+          fi

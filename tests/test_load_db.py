@@ -54,6 +54,22 @@ def test_rerun_inserts_nothing_updates_everything_and_applies_changes(db, small_
     ]
 
 
+def test_run_summary_reads_the_real_load_line(db, small_events, write_snapshot, caplog):
+    """The summary's 'inserted / updated / flagged' pattern must match what load() really logs."""
+    import sys
+
+    from conftest import ROOT
+
+    sys.path.insert(0, str(ROOT / "scripts"))
+    import run_summary
+
+    with caplog.at_level(logging.INFO, logger="load"):  # so the 'Read N rows' line is captured too
+        run_load(write_snapshot(small_events), caplog)
+    info = run_summary.parse("", "", caplog.text)
+    assert info["result"] == (5, 0, 0)
+    assert info["read"] == (5, 5, 0)
+
+
 def test_event_missing_from_a_later_snapshot_is_deactivated_not_deleted(db, small_events, write_snapshot, caplog):
     assert run_load(write_snapshot(small_events), caplog) == (5, 0, 0)
 

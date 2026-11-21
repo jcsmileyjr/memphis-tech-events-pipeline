@@ -1,0 +1,183 @@
+name: Pipeline
+
+# Extract from Contentful, clean, and load into the hosted Postgres (Supabase).
+#
+# SECURITY: this workflow reads secrets, so it must never run for pull requests or pushes.
+# It only runs on a schedule or when someone with write access presses "Run workflow".
+# Scheduled workflows run from the default branch only.
+on:
+  schedule:
+    # Cron is in UTC. 03:23 UTC on Saturday is Friday night in Memphis:
+    #   Friday 9:23 PM CST (UTC-6, early Nov to mid Mar)
+    #   Friday 10:23 PM CDT (UTC-5, mid Mar to early Nov)
+    # GitHub does not follow daylight saving, so the local time shifts by an hour twice a year.
+    # The 23-minute offset avoids the top of the hour, when scheduled runs are often delayed.
+    - cron: "23 3 * * 6"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Dry run: extract and transform run, but load.py only validates (nothing is written to the database)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+# Never run two loads at once. A second run waits instead of cancelling one that is mid-load.
+concurrency:
+  group: pipeline
+  cancel-in-progress: false
+
+jobs:
+  pipeline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      PYTHONUNBUFFERED: "1"
+      PYTHONUTF8: "1"
+      # 'true' only for a manual dry run; schedule runs have no inputs, so this is 'false'.
+      DRY_RUN: ${{ inputs.dry_run && 'true' || 'false' }}
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+
+      - name: Install dependencies
+        run: python -m pip install -r requirements-dev.txt
+
+      # Secrets are passed only to the steps that need them (step-level env), never job-wide.
+      - name: Check the Contentful settings are present
+        shell: bash
+        env:
+          CONTENTFUL_SPACE_ID: ${{ secrets.CONTENTFUL_SPACE_ID }}
+          CONTENTFUL_ACCESS_TOKEN: ${{ secrets.CONTENTFUL_ACCESS_TOKEN }}
+          CONTENTFUL_CONTENT_TYPE: ${{ vars.CONTENTFUL_CONTENT_TYPE || secrets.CONTENTFUL_CONTENT_TYPE }}
+        run: |
+          missing=0
+          for name in CONTENTFUL_SPACE_ID CONTENTFUL_ACCESS_TOKEN; do
+            if [ -z "${!name}" ]; then
+              echo "::error::Secret $name is not set (Settings > Secrets and variables > Actions)."
+              missing=1
+            fi
+          done
+          if [ -z "$CONTENTFUL_CONTENT_TYPE" ]; then
+            echo "::warning::CONTENTFUL_CONTENT_TYPE is not set, so extract.py will fetch every content type in the space."
+          fi
+          exit $missing
+
+      # Validates DATABASE_URL without printing it, and masks its parts so they cannot show up
+      # in a public log. GitHub only masks the exact full secret string; a connection error
+      # would otherwise print the pooler host, user and project ref on their own.
+      - name: Check and mask the database connection string
+        if: ${{ env.DRY_RUN != 'true' }}
+        shell: bash
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: |
+          python - <<'PY'
+          import os, sys
+          from urllib.parse import unquote, urlparse
+
+          url = os.environ.get("DATABASE_URL", "")
+          if not url:
+              print("::error::Secret DATABASE_URL is not set (Settings > Secrets and variables > Actions).")
+              sys.exit(1)
+          try:
+              parsed = urlparse(url)
+              host, raw_user, raw_pw = parsed.hostname, parsed.username or "", parsed.password or ""
+              parsed.port
+          except ValueError:
+              print("::error::DATABASE_URL is not a valid URL.")
+              sys.exit(1)
+          if parsed.scheme not in ("postgresql", "postgres") or not host or not raw_user or not raw_pw:
+              print("::error::DATABASE_URL must look like postgresql://USER:PASSWORD@HOST:PORT/DBNAME "
+                    "(use the Supabase session pooler string).")
+              sys.exit(1)
+
+          user, password = unquote(raw_user), unquote(raw_pw)
+          masks = {raw_pw, password, raw_user, user, host}
+          if "." in user:
+              masks.add(user.split(".", 1)[1])  # the project ref on its own
+          for value in masks:
+              if value and value != "postgres":  # never mask the bare word "postgres"
+                  print(f"::add-mask::{value}")
+
+          if host.startswith("db.") and host.endswith(".supabase.co"):
+              print("::warning::DATABASE_URL looks like the direct Supabase connection, which is IPv6-only. "
+                    "GitHub runners are IPv4; use the session pooler string.")
+          PY
+
+      # The pipeline stops here if any non-database test fails.
+      - name: Tests (no database)
+        run: python -m pytest -m "not db" -q
+
+      - name: Extract
+        shell: bash   # explicit bash enables pipefail, so a failing script is not masked by tee
+        env:
+          CONTENTFUL_SPACE_ID: ${{ secrets.CONTENTFUL_SPACE_ID }}
+          CONTENTFUL_ACCESS_TOKEN: ${{ secrets.CONTENTFUL_ACCESS_TOKEN }}
+          CONTENTFUL_ENVIRONMENT: ${{ vars.CONTENTFUL_ENVIRONMENT || secrets.CONTENTFUL_ENVIRONMENT }}
+          CONTENTFUL_CONTENT_TYPE: ${{ vars.CONTENTFUL_CONTENT_TYPE || secrets.CONTENTFUL_CONTENT_TYPE }}
+        run: |
+          # extract.py treats an empty variable as a value, not as "unset", so drop empty ones.
+          [ -n "$CONTENTFUL_ENVIRONMENT" ] || unset CONTENTFUL_ENVIRONMENT
+          [ -n "$CONTENTFUL_CONTENT_TYPE" ] || unset CONTENTFUL_CONTENT_TYPE
+          python extract.py 2>&1 | tee extract.log
+
+      - name: Transform
+        shell: bash
+        run: python transform.py 2>&1 | tee transform.log
+
+      - name: Load (dry run, validate only)
+        if: ${{ env.DRY_RUN == 'true' }}
+        shell: bash
+        run: python load.py --dry-run 2>&1 | tee load.log
+
+      # No --init: the tables already exist.
+      - name: Load into Postgres
+        if: ${{ env.DRY_RUN != 'true' }}
+        shell: bash
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: python load.py 2>&1 | tee load.log
+
+      # load.py exits 0 when it skips bad rows. The valid rows are already committed by now,
+      # but the run goes red so a rejected event does not go unnoticed.
+      - name: Fail if any row was rejected
+        shell: bash
+        run: python scripts/run_summary.py gate --load load.log
+
+      - name: Run summary
+        if: always()
+        shell: bash
+        env:
+          JOB_STATUS: ${{ job.status }}
+        run: |
+          args=()
+          if [ "$DRY_RUN" = "true" ]; then args+=(--dry-run); fi
+          python scripts/run_summary.py summary \
+            --extract extract.log --transform transform.log --load load.log \
+            --output "$GITHUB_STEP_SUMMARY" "${args[@]}"
+          echo "Job status when this summary was written: **$JOB_STATUS**" >> "$GITHUB_STEP_SUMMARY"
+
+      # Public repo: anyone signed in to GitHub can download these for 30 days.
+      # The data is the public event listing plus a few contact emails from event descriptions.
+      - name: Upload raw and clean data
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: pipeline-data-${{ github.run_id }}
+          path: |
+            data/raw
+            data/clean
+          retention-days: 30
+          if-no-files-found: warn
