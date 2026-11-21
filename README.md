@@ -1,5 +1,8 @@
 # Memphis Tech Events Data Platform
 
+[![Tests](https://github.com/jcsmileyjr/memphis-tech-events-pipeline/actions/workflows/tests.yml/badge.svg)](https://github.com/jcsmileyjr/memphis-tech-events-pipeline/actions/workflows/tests.yml)
+[![Weekly pipeline](https://github.com/jcsmileyjr/memphis-tech-events-pipeline/actions/workflows/pipeline.yml/badge.svg)](https://github.com/jcsmileyjr/memphis-tech-events-pipeline/actions/workflows/pipeline.yml)
+
 A data pipeline, PostgreSQL warehouse, read-only API, and dashboard built on real Memphis tech event data from the [Memphis Tech Scene](https://memphistechscene.com) newsletter.
 
 ![Dashboard screenshot](./dashboard.png)
@@ -188,13 +191,14 @@ Everything lives at the repository root. Run every command below from the root.
 
 ## Limitations
 
-- **The API serves whatever was last loaded.** Changes in Contentful appear only after the pipeline runs again. Nothing is scheduled yet.
+- **The API serves whatever was last loaded.** The pipeline runs weekly (Friday night, Central time), so changes in Contentful can take up to a week to appear.
 - **Group data depends on the source.** 40 of 450 events (8.9%) have no group and sit in the catch-all, which the trending-groups results exclude.
 - **Each event has one category,** so an event that is both a networking event and AI-focused is counted once.
 - **No RSVP or engagement data.** The source does not contain counts.
 - **A re-created Contentful entry gets a new ID.** The old row is flagged inactive and the new one is inserted as a separate event.
 - **The API and dashboard run locally** against the hosted database. They are not deployed.
-- **Tests cover the pipeline only.** A small pytest suite covers the cleaning rules, the loader's validation and guards, and re-run behavior against a local database. The API and dashboard have no automated tests, and nothing runs the suite automatically yet.
+- **Tests cover the pipeline only.** A small pytest suite covers the cleaning rules, the loader's validation and guards, and re-run behavior against a database. It runs on every push and pull request. The API and dashboard have no automated tests.
+- **GitHub disables scheduled workflows after 60 days without repository activity,** and the free Supabase project can pause when idle. Either one stops the weekly load until I re-enable it.
 
 ## Running the tests
 
@@ -213,6 +217,15 @@ python -m pytest -m db
 ```
 
 They never use `DATABASE_URL`, and they refuse to run if the URL's host is not localhost, 127.0.0.1 or ::1, or if it contains "supabase".
+
+## Automation
+
+Two GitHub Actions workflows live in `.github/workflows/`:
+
+- **`tests.yml`** runs on every push and pull request. It runs the full test suite, including the database tests against a throwaway Postgres service container. It has no access to any secrets.
+- **`pipeline.yml`** runs the pipeline (tests, then extract, transform, load) every Friday night Central time, and can be started by hand from the Actions tab (with an optional dry-run). It never runs on pushes or pull requests. Each run writes a summary page with the extract, cleaning, and load counts, and keeps the raw and clean files as an artifact for 30 days. A failed run, including the safeguard that refuses an unusually small snapshot, turns the run red.
+
+The pipeline reads three repository secrets: `CONTENTFUL_SPACE_ID`, `CONTENTFUL_ACCESS_TOKEN`, and `DATABASE_URL` (the Supabase session pooler string). It also reads `CONTENTFUL_CONTENT_TYPE` and `CONTENTFUL_ENVIRONMENT` as repository variables.
 
 ## Documentation
 
