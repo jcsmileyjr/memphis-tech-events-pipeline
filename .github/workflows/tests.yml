@@ -69,3 +69,76 @@ jobs:
             echo "::error::Database tests were skipped; TEST_DATABASE_URL was not picked up."
             exit 1
           fi
+
+  # Builds the pipeline image and checks it. Does NOT run the pipeline (that would need
+  # Contentful and database secrets), does NOT log in to any registry, and does NOT push.
+  docker:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read   # same as the workflow default; repeated so this job is self-evident
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Plain `docker build` already uses BuildKit on ubuntu-latest. buildx + a cache action
+      # would add two more third-party actions for about a minute of saved time, so it is
+      # not used. The second build below reuses the first build's layers anyway.
+      - name: Build the test image
+        run: docker build --target test --tag pipeline:test .
+
+      # No network, no environment variables, no secrets. The non-database tests need none.
+      - name: Run the non-database tests inside the container
+        run: docker run --rm --network none pipeline:test
+
+      - name: Build the runtime image
+        run: docker build --tag pipeline:runtime .
+
+      # The runtime image's default command (the real pipeline) is never run here;
+      # only harmless commands (id, find, python -c ...) are run inside it.
+      - name: Smoke checks on the runtime image
+        shell: bash
+        run: |
+          run() { docker run --rm --network none pipeline:runtime "$@"; }
+          fail=0
+          problem() { echo "::error::$1"; fail=1; }
+
+          echo "--- Runs as non-root"
+          configured_user=$(docker image inspect --format '{{.Config.User}}' pipeline:runtime)
+          effective_uid=$(run id -u)
+          echo "Config.User='$configured_user' effective uid=$effective_uid"
+          if [ -z "$configured_user" ] || [ "$configured_user" = "root" ] || [ "$configured_user" = "0" ]; then
+            problem "The image is configured to run as root (USER is '$configured_user')."
+          fi
+          if [ "$effective_uid" = "0" ]; then problem "The container runs as uid 0 (root)."; fi
+
+          echo "--- Every file under /app"
+          run find /app -type f | sort
+
+          echo "--- No secrets or generated data"
+          env_files=$(run find / -xdev -name '.env*' -not -path '/proc/*' -not -path '/sys/*' 2>/dev/null || true)
+          if [ -n "$env_files" ]; then problem "Found .env file(s) in the image: $env_files"; fi
+          data_files=$(run find /app/data/raw /app/data/clean -type f)
+          if [ -n "$data_files" ]; then problem "Found files in data/raw or data/clean: $data_files"; fi
+
+          echo "--- Test code is not shipped"
+          for path in /app/tests /app/scripts /app/pytest.ini /app/requirements-dev.txt; do
+            if run test -e "$path"; then problem "$path is in the runtime image."; fi
+          done
+          if run python -c "import pytest" 2>/dev/null; then problem "pytest is installed in the runtime image."; fi
+
+          echo "--- Required files are present"
+          for path in /app/extract.py /app/transform.py /app/load.py /app/sql/create_tables.sql /app/data/reference/groups.json; do
+            run test -f "$path" || problem "$path is missing from the image."
+          done
+
+          echo "--- Dependencies import and are consistent"
+          run python -c "import requests, dotenv, pandas, psycopg2, transform, load" || problem "An import failed."
+          run pip check || problem "pip check reported broken dependencies."
+
+          echo "--- Image size"
+          docker image ls pipeline:runtime pipeline:test
+
+          exit $fail
