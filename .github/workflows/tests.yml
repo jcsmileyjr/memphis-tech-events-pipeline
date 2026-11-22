@@ -139,6 +139,6 @@ jobs:
           run pip check || problem "pip check reported broken dependencies."
 
           echo "--- Image size"
-          docker image ls pipeline:runtime pipeline:test
+          docker image ls pipeline   # one argument only: the repository name lists both tags
 
           exit $fail
