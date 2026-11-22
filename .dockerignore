@@ -1,0 +1,44 @@
+# .dockerignore: files in this list are never sent to the Docker build, so they can
+# never end up in the image. It applies to the whole build (both stages), not per stage.
+
+# Secrets
+.env
+.env.*
+
+# Version control and CI config
+.git
+.github
+
+# Local Python artifacts (a Windows .venv is useless inside a Linux image)
+.venv
+venv
+**/__pycache__
+*.pyc
+.pytest_cache
+
+# Generated pipeline data: never bake data into an image
+data/raw
+data/clean
+
+# Not part of the pipeline image
+api
+dashboard
+docs
+**/node_modules
+_to_delete
+README.md
+LICENSE
+dashboard.png
+
+# Editor, OS, logs
+.vscode
+.DS_Store
+*.log
+
+# The build files themselves are not needed inside the image
+Dockerfile
+.dockerignore
+
+# NOT excluded on purpose (needed by the image): sql/, data/reference/, tests/,
+# scripts/, pytest.ini, requirements.txt, requirements-dev.txt, and the three scripts.
+# Never add a bare "data" line here: it would also exclude data/reference/groups.json.
