@@ -2,11 +2,11 @@
 
 ## Summary
 
-I turned about 16 months of Memphis tech event listings (September 2025 through December 2026, including upcoming events), stored in a publishing CMS, into a clean, queryable PostgreSQL warehouse with a read-only API and a dashboard on top. A Python pipeline pulls the events from Contentful, cleans inconsistent values, and loads them into a star schema hosted on Supabase. Loading the same file twice leaves the row count unchanged: the first run inserted 450 events, and the second inserted none and updated 450. A small FastAPI service serves the data through a database user that can only read, and a Next.js dashboard answers four questions about the Memphis tech event scene.
+I turned about 16 months of Memphis tech event listings (September 2025 through December 2026, including upcoming events), stored in a publishing CMS, into a clean, queryable PostgreSQL warehouse with a read-only API and a dashboard on top. A Python pipeline pulls the events from Contentful, cleans inconsistent values, and loads them into a star schema hosted on Supabase. Loading the same file twice leaves the row count unchanged: the first run inserted 450 events, and the second inserted none and updated 450. A small FastAPI service serves the data through a database user that can only read, and a Next.js dashboard answers four questions about the Memphis tech event scene. A GitHub Actions workflow runs the pipeline every Friday night after its tests pass, and a pytest suite and a Docker image check every push.
 
 ![Dashboard screenshot](images/dashboard.png)
 
-**Stack:** Python (requests, pandas, psycopg2), Contentful Content Delivery API, PostgreSQL (hosted on Supabase), SQL (star schema), FastAPI, Pydantic, Next.js 16, React 19, TypeScript, Tailwind CSS, Recharts.
+**Stack:** Python (requests, pandas, psycopg2), Contentful Content Delivery API, PostgreSQL (hosted on Supabase), SQL (star schema), FastAPI, Pydantic, Next.js 16, React 19, TypeScript, Tailwind CSS, Recharts, pytest, GitHub Actions, Docker.
 
 ## The problem
 
@@ -34,6 +34,8 @@ flowchart LR
 
 Each stage has one job and writes its output to disk or the database, so any stage can be re-run without repeating the ones before it.
 
+Around those stages, a scheduled GitHub Actions workflow runs the tests and then extract, transform, and load, and a separate workflow tests and builds the Docker image on every push (see "Automation, tests, and container").
+
 ## Key decisions and trade-offs
 
 | Decision | Why | Trade-off |
@@ -56,7 +58,12 @@ Each stage has one job and writes its output to disk or the database, so any sta
 | "Trending" means what organizers are focused on: event counts by group and by category over a recent window | There are no RSVP numbers, so popularity can't be measured. Counts in the last N days (default 90) show where organizers put their effort | Reflects supply of events, not attendance |
 | Dashboard fetches the API from the server (Next.js Server Components) | The browser never calls the API, so there is no CORS setup and the API address stays server-side | The dashboard needs the API running to render |
 | Next.js dashboard instead of Power BI | I tried Power BI first and didn't get on with the workflow. A Next.js app keeps the dashboard in code I can version, review, and run with the rest of the project | More front-end code to write than dragging visuals onto a canvas |
-| Hosted Postgres (Supabase) instead of only a local database | A scheduled job can't reach a database on my laptop, and a hosted one is a step toward running the pipeline automatically | A free tier has limits, and the connection details (pooler, credentials) need care |
+| Hosted Postgres (Supabase) instead of only a local database | A scheduled job can't reach a database on my laptop, so a hosted one was the first step toward running the pipeline automatically. The weekly workflow now loads into it | A free tier has limits (an idle project can pause), and the connection details (pooler, credentials) need care |
+| Scheduled GitHub Actions workflow (Friday night, Central time) | The warehouse stays current without me running three scripts by hand, and a manual "Run workflow" button with a dry-run option covers the times I want to check first | Cron runs in UTC and ignores daylight saving, so the local time shifts by an hour twice a year. GitHub also disables scheduled workflows after 60 days without repository activity |
+| Pipeline workflow runs only on a schedule or by hand, never on pushes or pull requests | It reads real secrets (Contentful token, database URL), so code from a pull request must never be able to run it | I can't see a pipeline run for every change, so the test workflow has to cover that |
+| Separate test workflow with no secrets, using a throwaway Postgres container | Every push and pull request gets the full suite, including the database tests, without touching the real warehouse. The test fixture refuses any host except localhost and anything containing "supabase" | The database tests run against a local Postgres, not Supabase, so a Supabase-specific problem would not show up |
+| Run summary page and a gate that fails the run on rejected rows | The loader exits successfully when it skips bad rows, so a rejected event could go unnoticed. The gate turns the run red, and the summary shows the extract, cleaning, and load counts for each run | The summary parses the scripts' log messages, so rewording a message breaks it. A test runs the real scripts to catch that |
+| Docker image for the pipeline only, in a multi-stage build (a test stage and a runtime stage) | The same code runs the same way anywhere, and the runtime image has no tests, no pytest, no `.env` files, and no secrets. Secrets are passed when the container runs, never baked in | The base image is pinned by digest for reproducible builds, so I have to update it by hand to get security patches. The API and dashboard are not in the image |
 
 ## What the data looked like
 
@@ -165,6 +172,21 @@ A Next.js app with one page. A Server Component fetches from the API on the serv
 
 The four questions: how many events happen per month, which categories dominate, which groups are most active, and what time of day events start.
 
+## Automation, tests, and container
+
+**Tests.** A pytest suite covers the pipeline (not the API or dashboard): the cleaning rules in `transform.py`, the loader's validation and guards, the run-summary script, and the re-run behavior against a real database. The database tests load a tiny fixture file into a throwaway schema and drop it afterward. The tests that need no database run with no secrets and no network.
+
+**Two workflows.**
+
+| Workflow | When it runs | What it does | Secrets |
+|---|---|---|---|
+| `tests.yml` | Every push and pull request | Runs the tests without a database, then the database tests against a throwaway Postgres container. Fails if a database test is skipped, because a skipped test looks green but proves nothing. Also builds the Docker image and checks it | None |
+| `pipeline.yml` | Every Friday night (Central time) and by hand, with an optional dry run | Runs the non-database tests first, then extract, transform, and load. Fails the run if any row was rejected, writes a run summary, and keeps the raw and clean files as an artifact for 30 days | Contentful and database credentials, passed only to the steps that need them |
+
+I kept them separate on purpose. Anything that reads secrets must never run for a pull request, and anything that runs for pull requests must never see a secret. The pipeline workflow also masks the pieces of the database connection string (host, user, project reference) so a connection error can't leak them into a public log, and a concurrency rule stops two loads from running at once.
+
+**Docker.** The pipeline has a multi-stage Dockerfile. The `test` stage adds pytest and the tests, and CI runs it with the network turned off. The `runtime` stage is the image I would actually run. It runs as a non-root user and has no tests, `.env` files, or generated data, and CI checks each of those on every push. CI builds and checks the image but doesn't run the pipeline in it or push it anywhere. The weekly workflow runs the Python scripts directly, not through the container.
+
 ## Problems I hit and how I solved them
 
 - **401 from Contentful.** The Space ID loaded correctly, so I suspected the credentials, not the request. The cause was the wrong token type: the Content Delivery API only accepts its own token. Lesson: when the URL is right, test credentials in isolation.
@@ -200,14 +222,16 @@ The event count stayed at 450, so the upsert on the event ID prevents duplicates
 
 ## Limitations and what's next
 
-- **Data freshness.** The API serves whatever was last loaded. Changes in Contentful appear only after I run the pipeline again, and nothing is scheduled.
+- **Data freshness.** The API serves whatever was last loaded. The pipeline runs once a week (Friday night), so a change in Contentful can take up to a week to appear unless I start the workflow by hand. GitHub disables scheduled workflows after 60 days without repository activity, and the free Supabase project can pause when idle. Either one stops the weekly load until I re-enable it.
 - No RSVP or engagement counts exist in the source, so engagement analysis isn't supported. "Trending" shows where organizers are putting their events, not what attendees choose.
 - 8.9% of events have no real group, so any group ranking should show its coverage. Each event has a single category, so an event that is both networking and AI-focused is counted once.
 - The data starts in September 2025, so earlier trends can't be answered.
 - Only a start time is stored, with no end time, venue or address.
 - Removed events are flagged, not deleted. None of the snapshots on disk shows a removal, so that path is untested on real data. Contentful's Sync API handles deletions explicitly and would also make loads incremental.
-- The API and dashboard run locally against the hosted database. There are no automated tests yet.
-- **Next:** a scheduled GitHub Actions workflow that runs the pipeline every Friday night, pipeline tests and logging, a Docker image, and a Power BI report on the same warehouse alongside the Next.js dashboard.
+- The API and dashboard run locally against the hosted database. Automated tests cover the pipeline only, so the API and dashboard have none.
+- The Docker image is built and checked in CI but not pushed to a registry or used by the weekly run, and the API and dashboard are not containerized.
+- Logging is the scripts' own output plus the run summary. There is no alerting beyond a failed run turning red in GitHub.
+- **Next:** tests for the API, a Power BI report on the same warehouse alongside the Next.js dashboard, and either running the weekly job from the Docker image or deleting the image if nothing needs it.
 
 ## How I worked
 
@@ -230,4 +254,6 @@ I designed first, then directed AI tools, then reviewed the output. I defined th
 - A column you can't populate shouldn't be in the schema. Removing RSVP kept the design honest.
 - Profile the real file before designing. Three assumptions in the brief (the row count, the start date and sparse group data) were wrong, and finding that out early was cheap.
 - Test the second run, not just the first. A design that says "re-runnable" proves little until the same file loaded twice leaves the row count unchanged.
-- **What I'd do differently:** schedule the pipeline from the start, with a script that runs it every Friday night so the warehouse stays current without me running each step by hand. I'd also add a Power BI report on the same warehouse next to the Next.js dashboard.
+- A job that succeeds isn't always a job that worked. The loader exits cleanly when it skips bad rows, so I added a gate that fails the run, and a test check that skipped database tests fail the build.
+- Keep secrets and untrusted code apart. Splitting the test workflow (no secrets, runs on every pull request) from the pipeline workflow (secrets, runs only on a schedule or by hand) was the main design decision in the automation.
+- **What I'd do differently:** write the tests and schedule the pipeline from the start, not after the first manual loads. Having them earlier would have caught problems sooner and kept the warehouse current from the first week. I'd also add a Power BI report on the same warehouse next to the Next.js dashboard.
