@@ -59,9 +59,7 @@ Around those stages, a scheduled GitHub Actions workflow runs the tests and then
 
 ## Results
 
-I checked the loader's validation against the real file with a dry run, then loaded the data into a hosted PostgreSQL database on Supabase. The API runs against it, and the dashboard renders all four charts from the API (screenshot at the top).
-
-**Row counts after the load:** `fact_events` 450, `dim_group` 30, `dim_event_type` 3, `dim_event_category` 7, `dim_date` 3,774.
+I checked the loader's validation against the real file with a dry run, then loaded the data into the hosted Supabase database.
 
 **Re-run test.** I ran the loader twice on the same clean file (450 rows, 0 rejected):
 
@@ -89,7 +87,8 @@ The event count stayed at 450, so the upsert on the event ID prevents duplicates
 - **Keep secrets and untrusted code apart.** The test workflow runs on every pull request with no secrets. The pipeline workflow has the secrets and runs only on a schedule or by hand.
 - **Give the API a database user that can only read.** A bug or a bad request can't change the warehouse.
 
-**All decisions:**
+<details>
+<summary><strong>All decisions and trade-offs</strong> (for the full list)</summary>
 
 | Decision | Why | Trade-off |
 |---|---|---|
@@ -103,9 +102,6 @@ The event count stayed at 450, so the upsert on the event ID prevents duplicates
 | Flag removed events (`is_active = false`) instead of deleting them | Keeps history and is reversible if an event comes back | One extra column; queries must filter on it. The loader refuses to run if the snapshot is under half the size of the warehouse, so a failed extract can't deactivate everything |
 | Date and time stored as a `DATE` plus a nullable `TIME` | Matches the source (a date and a wall-clock time, no time zone). All events are in Memphis (America/Chicago), and a missing time stays NULL instead of an invented value. A single timestamp would force a fake time, and a timestamp with time zone would add DST conversion and shift day boundaries (a 7 PM Central event falls on the next day in UTC) | Two columns to combine when an exact instant is needed |
 | Events with no group use the source's own "Random Group" row, flagged `is_catch_all` | The source already uses it as the bucket for events with no group, so there is nothing to invent. The flag keeps it out of group rankings without a hard-coded ID in every query | The catch-all must be excluded from group questions |
-| Registration links not stored | The source field is a URL (or `TBD`), an address and not a countable measure. Nothing in the questions needs it | The API can't link out to registration pages |
-| Event details (name, description, intro) on the fact table | One row per event, so a separate event dimension would add a join and a second key for no analytical gain | A wider fact table than textbook |
-| Compute month, weekday and hour in queries | They can be derived from the date and time, and stored copies could drift. Only the `dim_date` key is stored | Slightly longer queries |
 | API connects as a database user with `SELECT` only | Even a bug or a bad request can't change the warehouse | A separate user and password to set up |
 | API built around the dashboard's four questions, not a general events API | The dashboard is the only consumer, so the endpoints return summaries (events per month, category, hour, trending) and a small event shape, not every field | Not a general-purpose events API |
 | "Trending" means what organizers are focused on: event counts by group and by category over a recent window | There are no RSVP numbers, so popularity can't be measured. Counts in the last N days (default 90) show where organizers put their effort | Reflects supply of events, not attendance |
@@ -117,6 +113,8 @@ The event count stayed at 450, so the upsert on the event ID prevents duplicates
 | Separate test workflow with no secrets, using a throwaway Postgres container | Every push and pull request gets the full suite, including the database tests, without touching the real warehouse. The test fixture refuses any host except localhost and anything containing "supabase" | The database tests run against a local Postgres, not Supabase, so a Supabase-specific problem would not show up |
 | Run summary page and a gate that fails the run on rejected rows | The loader exits successfully when it skips bad rows, so a rejected event could go unnoticed. The gate turns the run red, and the summary shows the extract, cleaning, and load counts for each run | The summary parses the scripts' log messages, so rewording a message breaks it. A test runs the real scripts to catch that |
 | Docker image for the pipeline only, in a multi-stage build (a test stage and a runtime stage) | The same code runs the same way anywhere, and the runtime image has no tests, no pytest, no `.env` files, and no secrets. Secrets are passed when the container runs, never baked in | The base image is pinned by digest for reproducible builds, so I have to update it by hand to get security patches. The API and dashboard are not in the image |
+
+</details>
 
 ## How I worked
 
@@ -287,11 +285,7 @@ I kept them separate on purpose. Anything that reads secrets must never run for 
 ## Problems I hit and how I solved them
 
 - **401 from Contentful.** The Space ID loaded correctly, so I suspected the credentials, not the request. The cause was the wrong token type: the Content Delivery API only accepts its own token. Lesson: when the URL is right, test credentials in isolation.
-- **`ModuleNotFoundError: pandas`.** The package was installed in a different Python environment than the one running the script. Fixed by activating the virtual environment first, then saving `requirements.txt`.
-- **Project layout.** The scripts and `data/` folders originally lived inside the `.venv` folder. I later moved everything to the repository root and kept `.venv/` for the virtual environment only.
 - **Group IDs becoming decimals.** pandas turns an integer column with gaps into floats (9 becomes 9.0), which would break the join to the group table. I converted it to a nullable integer type, and the loader converts it to a plain whole number before writing.
 - **My assumptions didn't match the data.** The project brief said 435 entries, history from October 2024, and group data for only a few months. The data had more than 440 entries from September 2025, and every event had a group ID (40 of them the catch-all). I profiled the file before designing, so the design followed the data and not the brief.
 - **`updated_at` is useless for "recently changed".** In the 440-event snapshot, 298 of 440 rows shared one date (a bulk edit on 2026-11-01), so I based recency on `created_at` instead.
-- **Power BI.** I planned to build the dashboard in Power BI because it would add to my toolset, but the workflow didn't suit me. I switched to a Next.js dashboard on the API I had already built.
-- **Database connection.** `psql` was installed but not on the PATH, and the first connection to my local database failed with a password authentication error for the `postgres` user.
 - **Supabase connection string.** Supabase offers a direct connection and a pooled one. I used the session pooler, which needs a username that includes the project reference (`postgres.<project-ref>`), because the direct address may not be reachable from IPv4-only networks such as GitHub Actions runners. The read-only API user follows the same pattern (`api_reader.<project-ref>`).
