@@ -1,45 +1,82 @@
-# Memphis Tech Events: An Automated ETL Pipeline, Data Warehouse, API and Dashboard
+# Building a Production-Style Data Pipeline for 450 Memphis Tech Events
 
-I built a pipeline that turns 450 community event listings from the Memphis Tech Scene newsletter's CMS into a clean, queryable database that refreshes itself every week, with an API and a dashboard on top.
+**Python ETL → PostgreSQL warehouse → FastAPI → Next.js dashboard → GitHub Actions → Docker**
+
+I built an automated data pipeline that turns 450 Memphis Tech Scene event listings from a publishing CMS into a clean, queryable PostgreSQL warehouse, then serves that data through an API and dashboard.
+
+The pipeline runs weekly, validates the data before loading it, prevents duplicate records on re-runs, and fails the workflow when rows are rejected.
 
 **Links:** [Code on GitHub](https://github.com/jcsmileyjr/memphis-tech-events-pipeline) · [Test and pipeline runs](https://github.com/jcsmileyjr/memphis-tech-events-pipeline/actions)
 
+![Dashboard screenshot](images/dashboard.png)
+
+---
+
 ## What this demonstrates
 
-- **ETL in Python:** extract from the Contentful API, clean inconsistent data, and load into PostgreSQL
-- **Data modeling:** a star schema designed around the four questions the data needed to answer
-- **Data quality:** I audited the source first, then fixed problems in the pipeline or at the source
-- **Testing and automation:** pytest tests run in GitHub Actions on every push, and a scheduled workflow runs the pipeline every Friday night
-- **Delivery:** a read-only FastAPI service and a Next.js dashboard, plus a Docker image built and checked in CI
+- **Data engineering:** Python ETL from the Contentful API into PostgreSQL
+- **Data modeling:** a star schema designed around the questions the data needed to answer
+- **Data quality:** audited the source data before writing cleaning rules
+- **Reliability:** re-runnable loads, validation guards, a rejected-row gate, and run summaries
+- **Automation:** pytest and GitHub Actions on every push and pull request, plus a scheduled weekly pipeline
+- **Delivery:** a read-only FastAPI service and a Next.js dashboard
+- **Infrastructure:** a Docker image built and checked in CI
 
 ## Results at a glance
 
-- **450 events** across 16 months, loaded into a hosted PostgreSQL (Supabase) warehouse
-- **Safe to re-run:** loading the same file twice inserted 450 rows the first time and 0 the second, so no duplicates
-- **Messy source data fixed:** about 9% of event-type values and 18 start times were typed inconsistently, and the pipeline standardizes them
-- **Weekly automated run** with a run summary, and a gate that fails the run if any row is rejected
+| Result | Outcome |
+|---|---|
+| Events loaded | **450** across 16 months |
+| Duplicate protection | A second identical load inserted **0** new rows |
+| Data quality | About **9%** of event-type values needed standardizing |
+| Time cleanup | **18** inconsistent start times standardized in the latest run |
+| Automation | Weekly scheduled pipeline with a run summary |
+| Failure protection | The workflow fails when any row is rejected |
+| API | Read-only FastAPI service |
+| Dashboard | Next.js dashboard answering four analytical questions |
 
-![Dashboard screenshot](images/dashboard.png)
+---
 
-**Stack:** Python (requests, pandas, psycopg2), Contentful Content Delivery API, PostgreSQL (hosted on Supabase), SQL (star schema), FastAPI, Pydantic, Next.js 16, React 19, TypeScript, Tailwind CSS, Recharts, pytest, GitHub Actions, Docker.
+## Project takeaway
 
-*Known gaps and next steps are listed under "Limitations and what's next".*
+This project started as a simple question:
 
-## Overview
+> **Can the Memphis Tech Scene's event history become useful data instead of remaining publishing content?**
 
-I turned about 16 months of Memphis tech event listings (September 2025 through December 2026, including upcoming events), stored in a publishing CMS, into a clean, queryable PostgreSQL warehouse with a read-only API and a dashboard on top. A Python pipeline pulls the events from Contentful, cleans inconsistent values, and loads them into a star schema hosted on Supabase. Loading the same file twice leaves the row count unchanged: the first run inserted 450 events, and the second inserted none and updated 450. A small FastAPI service serves the data through a database user that can only read, and a Next.js dashboard answers four questions about the Memphis tech event scene. A GitHub Actions workflow runs the pipeline every Friday night after its tests pass, and a pytest suite and a Docker image check every push.
+The result is a repeatable pipeline that takes messy CMS data through extraction, transformation, validation, warehousing, API delivery, and visualization.
 
-## The problem
+More importantly, the project shows the engineering decisions that make a pipeline trustworthy:
 
-The Memphis Tech Scene newsletter publishes community events every week. Those events live in Contentful, a CMS built for publishing content, not for analysis. That created three problems:
+**measure the source → design around real questions → preserve raw data → validate aggressively → make loads re-runnable → separate secrets from untrusted code → expose only what consumers need.**
 
-- **No way to ask questions of the data.** Contentful has no query layer for questions like "how many events per month?" or "which categories dominate?"
-- **Nothing enforced consistency.** Fields were free text, so the same value was typed several ways.
-- **Awkward shape.** The API returns nested JSON with linked entries, not rows and columns.
+---
 
-**Goal:** make the event history queryable, trustworthy, and visible: clean data in a warehouse, served through an API, and shown in a dashboard.
+# 1. The problem
 
-## Architecture
+The Memphis Tech Scene newsletter publishes community technology events every week. The events live in Contentful, a CMS designed for publishing rather than analysis.
+
+That created three practical problems:
+
+1. **The data was difficult to query.** Contentful could store the events, but it had no query layer for questions such as "How many events happen each month?"
+2. **The data wasn't consistently structured.** Several fields were free text, so the same value was typed in different ways.
+3. **The API response wasn't analysis-ready.** Events arrived as nested JSON with linked entries, not rows and relationships.
+
+### Goal
+
+Turn the publishing data into a **trustworthy, queryable data system** that could:
+
+- preserve the original source data
+- clean and validate inconsistent values
+- support analytical queries
+- refresh automatically
+- expose the data through an API
+- show the results in a simple dashboard
+
+---
+
+# 2. The solution
+
+I built a small end-to-end data platform:
 
 ```mermaid
 flowchart LR
@@ -53,145 +90,35 @@ flowchart LR
     H --> I[Next.js dashboard]
 ```
 
-Each stage has one job and writes its output to disk or the database, so any stage can be re-run without repeating the ones before it.
+Each stage has one responsibility and can be re-run without repeating the ones before it.
 
-Around those stages, a scheduled GitHub Actions workflow runs the tests and then extract, transform, and load, and a separate workflow tests and builds the Docker image on every push (see "Automation, tests, and container").
+Two GitHub Actions workflows surround the pipeline:
 
-## Results
+```mermaid
+flowchart LR
+    subgraph T[tests.yml: every push and pull request, no secrets]
+        P1[pytest, no database] --> P2[database tests<br/>throwaway Postgres] --> P3[Docker build and checks]
+    end
+    subgraph W[pipeline.yml: Friday schedule or manual run, uses secrets]
+        W1[tests] --> W2[extract → transform → load] --> W3[rejected-row gate<br/>and run summary]
+    end
+```
 
-I checked the loader's validation against the real file with a dry run, then loaded the data into the hosted Supabase database.
-
-**Re-run test.** I ran the loader twice on the same clean file (450 rows, 0 rejected):
-
-| Run | `fact_events` result | Deactivated |
-|---|---|---|
-| First (`--init`) | 450 inserted, 0 updated | 0 |
-| Second | 0 inserted, 450 updated | 0 |
-
-The event count stayed at 450, so the upsert on the event ID prevents duplicates.
-
-**What the warehouse shows**, queried from the database:
-- **Event types:** In-Person 364, Virtual 70, Hybrid 16.
-- **Categories:** Networking 180, Tech Talk 109, Workshop 46, Entrepreneur 44, AI 39, Conference 22, Hackathon 10.
-- **Events per month:** peaks at 45 in April 2026; September 2025 is a partial first month, and November and December 2026 include upcoming events.
-- **Top groups (catch-all excluded):** Midsouth Makers 54, Memphis AI Meetup Group 38, CodeCrew 32, Code Connector 32, Epicenter Memphis 22.
-
-## Key decisions and trade-offs
-
-**The decisions that mattered most:**
-
-- **Audit the data before writing cleaning rules.** Counting the real values showed my assumptions about the data were wrong, and my manual counts became the check for the pipeline.
-- **Keep the raw snapshot untouched.** Cleaning can be re-run without hitting the API, and raw data is never lost.
-- **Upsert on the source's event ID, and flag removed events instead of deleting them.** Re-running can't create duplicates, history is kept, and the loader refuses a snapshot under half the warehouse size so a failed extract can't deactivate everything.
-- **Leave out RSVP data.** The source holds a link, not a count, so I removed those questions instead of building on data that doesn't exist.
-- **Keep secrets and untrusted code apart.** The test workflow runs on every pull request with no secrets. The pipeline workflow has the secrets and runs only on a schedule or by hand.
-- **Give the API a database user that can only read.** A bug or a bad request can't change the warehouse.
-
-<details>
-<summary><strong>All decisions and trade-offs</strong> (for the full list)</summary>
-
-| Decision | Why | Trade-off |
-|---|---|---|
-| Paginated extract, not a single request | A single request silently misses entries past the page limit | More code, but correct |
-| Keep the raw snapshot untouched | Cleaning can be re-run without hitting the API again, and raw data is never lost | Extra files on disk |
-| Separate extract, transform, and load scripts | Each can be tested and re-run on its own | More files to manage |
-| Fail loudly on 4xx errors, retry only on 429 and 5xx | Bad credentials should stop the run, not be retried | Needs manual fixes when credentials break |
-| Standardize with a lookup table, not hand-fixes | Handles spelling variants I haven't seen yet | Unknown values are flagged, not guessed |
-| Star schema with one fact table and four dimensions | Built for the questions I want to ask (counts by month, category, group, time of day) | More joins than one flat table |
-| Upsert on the Contentful event ID | Re-running the pipeline can't create duplicates | Needs a separate rule for removed events |
-| Flag removed events (`is_active = false`) instead of deleting them | Keeps history and is reversible if an event comes back | One extra column; queries must filter on it. The loader refuses to run if the snapshot is under half the size of the warehouse, so a failed extract can't deactivate everything |
-| Date and time stored as a `DATE` plus a nullable `TIME` | Matches the source (a date and a wall-clock time, no time zone). All events are in Memphis (America/Chicago), and a missing time stays NULL instead of an invented value. A single timestamp would force a fake time, and a timestamp with time zone would add DST conversion and shift day boundaries (a 7 PM Central event falls on the next day in UTC) | Two columns to combine when an exact instant is needed |
-| Events with no group use the source's own "Random Group" row, flagged `is_catch_all` | The source already uses it as the bucket for events with no group, so there is nothing to invent. The flag keeps it out of group rankings without a hard-coded ID in every query | The catch-all must be excluded from group questions |
-| API connects as a database user with `SELECT` only | Even a bug or a bad request can't change the warehouse | A separate user and password to set up |
-| API built around the dashboard's four questions, not a general events API | The dashboard is the only consumer, so the endpoints return summaries (events per month, category, hour, trending) and a small event shape, not every field | Not a general-purpose events API |
-| "Trending" means what organizers are focused on: event counts by group and by category over a recent window | There are no RSVP numbers, so popularity can't be measured. Counts in the last N days (default 90) show where organizers put their effort | Reflects supply of events, not attendance |
-| Dashboard fetches the API from the server (Next.js Server Components) | The browser never calls the API, so there is no CORS setup and the API address stays server-side | The dashboard needs the API running to render |
-| Next.js dashboard instead of Power BI | I tried Power BI first and didn't get on with the workflow. A Next.js app keeps the dashboard in code I can version, review, and run with the rest of the project | More front-end code to write than dragging visuals onto a canvas |
-| Hosted Postgres (Supabase) instead of only a local database | A scheduled job can't reach a database on my laptop, so a hosted one was the first step toward running the pipeline automatically. The weekly workflow now loads into it | A free tier has limits (an idle project can pause), and the connection details (pooler, credentials) need care |
-| Scheduled GitHub Actions workflow (Friday night, Central time) | The warehouse stays current without me running three scripts by hand, and a manual "Run workflow" button with a dry-run option covers the times I want to check first | Cron runs in UTC and ignores daylight saving, so the local time shifts by an hour twice a year. GitHub also disables scheduled workflows after 60 days without repository activity |
-| Pipeline workflow runs only on a schedule or by hand, never on pushes or pull requests | It reads real secrets (Contentful token, database URL), so code from a pull request must never be able to run it | I can't see a pipeline run for every change, so the test workflow has to cover that |
-| Separate test workflow with no secrets, using a throwaway Postgres container | Every push and pull request gets the full suite, including the database tests, without touching the real warehouse. The test fixture refuses any host except localhost and anything containing "supabase" | The database tests run against a local Postgres, not Supabase, so a Supabase-specific problem would not show up |
-| Run summary page and a gate that fails the run on rejected rows | The loader exits successfully when it skips bad rows, so a rejected event could go unnoticed. The gate turns the run red, and the summary shows the extract, cleaning, and load counts for each run | The summary parses the scripts' log messages, so rewording a message breaks it. A test runs the real scripts to catch that |
-| Docker image for the pipeline only, in a multi-stage build (a test stage and a runtime stage) | The same code runs the same way anywhere, and the runtime image has no tests, no pytest, no `.env` files, and no secrets. Secrets are passed when the container runs, never baked in | The base image is pinned by digest for reproducible builds, so I have to update it by hand to get security patches. The API and dashboard are not in the image |
-
-</details>
-
-## How I worked
-
-I designed first, then directed AI tools, then reviewed the output. I defined the questions and schema decisions, used Claude Code to profile the data, draft the design docs, and write the SQL, loader, API, and dashboard, and checked the results against my own audit counts. The decisions below were mine, some of them overriding or correcting the draft:
-
-- I decided RSVP stays out of scope and rejected storing the registration link as a column.
-- I told the assistant that "Random Group" is a catch-all, not a real organization, which changed how group data is modeled and ranked.
-- I fixed the `23:59` placeholder at the source instead of letting the loader hide it.
-- I chose to keep `dim_date`, to reuse the source's group IDs as keys, to compute derived columns in queries, and to flag removed events instead of deleting them.
-- I confirmed the three repeated name-and-date pairs are separate events, so no deduplication rule was added.
-- I defined what "trending" means for this data, and kept the API to the fields the dashboard needs instead of exposing everything.
-- I dropped Power BI for a Next.js dashboard after trying it.
-- I relabeled AI-focused events at the source in Contentful instead of guessing at labels in the pipeline.
-- I ran the load twice against the hosted database to check the re-run behavior myself, instead of relying on the design.
-
-## What I learned
-
-- Count the real values before writing cleaning rules. My manual audit became the test for the pipeline: the script found the same 38 type rows I had counted.
-- Keep the raw layer untouched. It made every later fix cheap.
-- A column you can't populate shouldn't be in the schema. Removing RSVP kept the design honest.
-- Profile the real file before designing. Three assumptions in the brief (the row count, the start date and sparse group data) were wrong, and finding that out early was cheap.
-- Test the second run, not just the first. A design that says "re-runnable" proves little until the same file loaded twice leaves the row count unchanged.
-- A job that succeeds isn't always a job that worked. The loader exits cleanly when it skips bad rows, so I added a gate that fails the run, and a test check that skipped database tests fail the build.
-- Keep secrets and untrusted code apart. Splitting the test workflow (no secrets, runs on every pull request) from the pipeline workflow (secrets, runs only on a schedule or by hand) was the main design decision in the automation.
-- **What I'd do differently:** write the tests and schedule the pipeline from the start, not after the first manual loads. Having them earlier would have caught problems sooner and kept the warehouse current from the first week. I'd also add a Power BI report on the same warehouse next to the Next.js dashboard.
-
-## Limitations and what's next
-
-- **Data freshness.** The API serves whatever was last loaded. The pipeline runs once a week (Friday night), so a change in Contentful can take up to a week to appear unless I start the workflow by hand. GitHub disables scheduled workflows after 60 days without repository activity, and the free Supabase project can pause when idle. Either one stops the weekly load until I re-enable it.
-- No RSVP or engagement counts exist in the source, so engagement analysis isn't supported. "Trending" shows where organizers are putting their events, not what attendees choose.
-- 8.9% of events have no real group, so any group ranking should show its coverage. Each event has a single category, so an event that is both networking and AI-focused is counted once.
-- The data starts in September 2025, so earlier trends can't be answered.
-- Only a start time is stored, with no end time, venue or address.
-- Removed events are flagged, not deleted. None of the snapshots on disk shows a removal, so that path is untested on real data. Contentful's Sync API handles deletions explicitly and would also make loads incremental.
-- The API and dashboard run locally against the hosted database. Automated tests cover the pipeline only, so the API and dashboard have none.
-- The Docker image is built and checked in CI but not pushed to a registry or used by the weekly run, and the API and dashboard are not containerized.
-- Logging is the scripts' own output plus the run summary. There is no alerting beyond a failed run turning red in GitHub.
-- **Next:** tests for the API, a Power BI report on the same warehouse alongside the Next.js dashboard, and either running the weekly job from the Docker image or deleting the image if nothing needs it.
+The separation is intentional: the test workflow never receives real credentials, and the workflow that reads them never runs for pull requests.
 
 ---
 
-## Technical detail
+# 3. Architecture
 
-The sections below cover the data audit, schema, API, dashboard, automation design and problems I hit.
+**Data:** Python, requests, pandas, PostgreSQL, SQL
+**Warehouse:** Supabase-hosted PostgreSQL
+**API:** FastAPI, Pydantic
+**Frontend:** Next.js 16, React 19, TypeScript, Tailwind CSS, Recharts
+**Testing:** pytest
+**Automation:** GitHub Actions
+**Containerization:** Docker
 
-## What the data looked like
-
-I audited the entries by counting the exact string values per field before writing any cleaning rules. The first audit covered 435 entries (the 2026-10-29 snapshot). The latest snapshot (2026-11-19) has 450. Counts below are from the first audit unless a bullet says "latest".
-
-- **Event type (attendance format):** 6 distinct values where there should be 3. "In Person" (36 rows), "INPERSON" (1), and "VIRTUAL" (1) were variants of "In-Person" and "Virtual". **38 of 435 rows (about 9%)** needed fixing. The latest run standardized 39 values.
-- **Event category:** 9 distinct values where there should be 7. "WORKSHOP" and "Tech TalkNetworking" (two categories run together) were the errors. I mapped the second to "Tech Talk", which is a judgment call I documented. 2 rows needed fixing. The latest run standardized 1 value.
-- **Time:** 41 distinct values in mixed formats: `18:00`, `9:15`, `0900`, `1730`, and `4PM`/`11AM`. I normalized them to 24-hour `HH:MM`. **17 rows changed** and every value parsed, leaving 30 distinct values. The latest run changed 18 rows and also leaves 30 distinct values, all in `HH:MM` format, with no event missing a time. One value, `23:59`, looked like a placeholder, not a real start time (1 event, a virtual entrepreneur event on 2026-09-21). I corrected it in Contentful to 17:00, so the pipeline needs no special rule. Older snapshots still contain the `23:59`.
-- **Groups (latest):** event groups come from a reference list of 30 community groups. In the latest file every event has a group ID, all 30 groups are used, and every ID exists in the reference list. But 40 events (8.9%) use "Random Group", the source's catch-all for events with no group, so **410 of 450 events (91.1%) have a real group**, spread across all 16 months. Earlier I had expected group data to be sparse. That was wrong for this file, and I only found out by measuring it. An earlier clean file had no group column at all, so loading it would put every event in the catch-all.
-- **Categories (latest):** in the first audit only 4 events were labeled AI, even though more of the events were AI-focused. I relabeled AI-focused events at the source in Contentful, and the latest run shows 39 AI events (Networking fell from 221 to 180).
-- **RSVP:** in the 440-entry snapshot I audited, the RSVP field was a link, not a count (424 URLs and 16 `TBD`), so engagement analytics weren't possible. I removed RSVP-based questions from the design instead of building on data that doesn't exist, and I decided not to carry the link as a column.
-- **History:** the earliest event is 2025-09-05. Many events were recorded in another system and ported into Contentful, so earlier history is not in this warehouse.
-- **Repeated names:** in the first audit, 3 pairs of events shared a name and date but had different IDs (for example, "Midsouth Makers Weekly Friday Open House" on 2025-10-03). I checked them, confirmed they are separate events, and kept all of them.
-
-**Root cause:** these were free-text fields. Converting them to dropdowns or validated fields in Contentful would stop new bad values at the source. The pipeline stays defensive either way.
-
-## Schema
-
-Star schema, one fact table with four dimensions. Grain: one row per event, keyed by Contentful's `sys.id`.
-
-| Table | Rows | Key | Purpose |
-|---|---|---|---|
-| `fact_events` | one per event (450 in the latest load) | `event_id` (text) | Event, its date and time, type, category, group, name, description, intro, timestamps, `is_active` |
-| `dim_event_type` | 3 | `event_type_id` | In-Person, Virtual, Hybrid |
-| `dim_event_category` | 7 | `event_category_id` | Networking, Tech Talk, Workshop, Entrepreneur, Conference, Hackathon, AI |
-| `dim_group` | 30 | `group_id` (the source ID) | Community groups, with the `is_catch_all` flag |
-| `dim_date` | 3,774 | `date_key` (YYYYMMDD) | One row per calendar day, 2025-09-01 to 2035-12-31, with year, quarter, month, weekday |
-
-**Questions the schema was designed to answer:**
-- How many events per month? (fact joined to `dim_date`)
-- Which categories dominate? (fact joined to `dim_event_category`)
-- Which groups are most active, shown with coverage? (fact joined to `dim_group`, catch-all excluded)
-- What time of day do events usually happen? (hour taken from `event_time`)
+The warehouse is a star schema with one fact table and four dimensions. The fact table is keyed by Contentful's source event ID.
 
 ```mermaid
 erDiagram
@@ -200,30 +127,6 @@ erDiagram
     dim_group |o--o{ fact_events : organizes
     dim_date ||--o{ fact_events : schedules
 
-    dim_event_type {
-        smallint event_type_id PK
-        text event_type_name UK
-    }
-    dim_event_category {
-        smallint event_category_id PK
-        text event_category_name UK
-    }
-    dim_group {
-        integer group_id PK
-        text group_name UK
-        text group_description
-        boolean is_catch_all
-    }
-    dim_date {
-        integer date_key PK
-        date full_date UK
-        smallint year
-        smallint quarter
-        smallint month
-        date month_start
-        smallint day_of_week
-        boolean is_weekend
-    }
     fact_events {
         text event_id PK
         integer date_key FK
@@ -233,59 +136,256 @@ erDiagram
         smallint event_category_id FK
         integer group_id FK
         text name
-        text description
-        text short_intro
-        timestamptz created_at
-        timestamptz updated_at
         boolean is_active
-        timestamptz loaded_at
     }
 ```
 
-`dim_date` is a calendar and never needs a daily update. It is seeded once through 2035, and the loader adds days if an event ever falls past the seeded range.
+The schema was designed around four questions:
 
-## The API
+- How many events happen per month?
+- Which categories dominate?
+- Which groups are most active?
+- What time of day do events usually start?
 
-A read-only FastAPI service sits on top of the warehouse. It connects with a database user that has `SELECT` access only, validates responses with Pydantic, and serves interactive documentation at `/docs`.
+That kept the warehouse focused on real analytical needs instead of modeling every field just because the source had it. Dates are stored as a `DATE` plus a nullable `TIME`, matching the source (a date and a Memphis wall-clock time). A missing time stays NULL and no time zone conversion can shift an evening event to the next day.
 
-| Endpoint | Returns |
+---
+
+# 4. Data quality: audit first, then transform
+
+One of the most important decisions was to **profile the real data before writing cleaning rules**.
+
+The audit showed that several assumptions about the source were wrong. For example:
+
+- Event types appeared in several formats: `In Person`, `INPERSON`, `VIRTUAL`.
+- Start times appeared as `18:00`, `9:15`, `0900`, `1730`, `4PM`, and `11AM`.
+- The group field was more complete than I expected. Every event had a group ID, but 40 of the latest 450 used the source's "Random Group" catch-all, so 410 (91.1%) have a real group.
+- RSVP data was a registration link, not an attendance count, so it could not support engagement analysis.
+- Only 4 events were labeled AI even though more were AI-focused. I relabeled them at the source, and the latest run shows 39.
+
+Instead of hiding those problems inside transformation code, I used the audit to decide what the pipeline should do.
+
+### Example: event type normalization
+
+The pipeline standardizes known variations through a lookup table, not one-off fixes. Unknown values are flagged, not guessed. My manual count of 38 rows that needed fixing became the check: the script found the same 38.
+
+### Example: time normalization
+
+The pipeline converts mixed time formats into `HH:MM`. One `23:59` value looked like a placeholder, not a real start time. I corrected it in Contentful instead of teaching the pipeline to hide the bad source value. That keeps the pipeline defensive while also improving the source system.
+
+### What the warehouse shows
+
+Event types are mostly In-Person (364), then Virtual (70) and Hybrid (16). Networking leads categories with 180 events, then Tech Talk (109) and Workshop (46). Events peak at 45 in April 2026, and the most active group is Midsouth Makers with 54.
+
+---
+
+# 5. Reliability and data integrity
+
+The pipeline is designed to be safe to run repeatedly.
+
+### Idempotent loading
+
+The loader uses the source event ID as the key and performs an upsert. I verified the behavior against the hosted database:
+
+| Run | Result |
 |---|---|
-| `GET /events` | Events, 100 per page, newest first, with optional month and category filters |
-| `GET /events/{event_id}` | One event |
-| `GET /stats/events-per-month` | Event counts per month, with empty months filled in as zero |
-| `GET /stats/events-per-category` | All-time counts per category |
-| `GET /stats/events-per-hour` | Counts by start hour. Events with no time are left out and counted separately |
-| `GET /trending/groups` | Most active groups in a recent window (default 90 days, 1 to 730), with coverage figures. The catch-all is excluded |
-| `GET /trending/categories` | Most common categories in the same window |
-| `GET /health` | Confirms the API can reach the database |
+| First load | 450 inserted, 0 updated |
+| Second load of the same data | 0 inserted, 450 updated |
 
-I kept the event shape small on purpose: name, date, type, category, group name, and event ID. The dashboard is the only consumer, and it doesn't need more.
+The warehouse stayed at 450 events. That test matters because "re-runnable" is only a design claim until the second run proves it.
 
-## The dashboard
+### Protecting against bad extracts
 
-A Next.js app with one page. A Server Component fetches from the API on the server and passes the data to Recharts chart components, so the browser never calls the API directly. Each chart is titled with the question it answers, handles its own error and empty states, and carries a short note about its data limits, such as group coverage and events excluded for having no start time.
+Removed events are flagged as inactive instead of deleted. The loader also refuses a snapshot that is less than half the current warehouse size, which protects the warehouse from mass deactivation if an extract unexpectedly returns a tiny dataset.
 
-The four questions: how many events happen per month, which categories dominate, which groups are most active, and what time of day events start.
+### Rejected-row gate
 
-## Automation, tests, and container
+The loader can skip invalid rows and still exit successfully, so a technically successful workflow could produce an incomplete warehouse. I added a gate that turns the run red if any rows are rejected. The run summary reports the extract, transform and load counts so the result is visible instead of buried in logs.
 
-**Tests.** A pytest suite covers the pipeline (not the API or dashboard): the cleaning rules in `transform.py`, the loader's validation and guards, the run-summary script, and the re-run behavior against a real database. The database tests load a tiny fixture file into a throwaway schema and drop it afterward. The tests that need no database run with no secrets and no network.
+---
 
-**Two workflows.**
+# 6. Automation and CI/CD
 
-| Workflow | When it runs | What it does | Secrets |
-|---|---|---|---|
-| `tests.yml` | Every push and pull request | Runs the tests without a database, then the database tests against a throwaway Postgres container. Fails if a database test is skipped, because a skipped test looks green but proves nothing. Also builds the Docker image and checks it | None |
-| `pipeline.yml` | Every Friday night (Central time) and by hand, with an optional dry run | Runs the non-database tests first, then extract, transform, and load. Fails the run if any row was rejected, writes a run summary, and keeps the raw and clean files as an artifact for 30 days | Contentful and database credentials, passed only to the steps that need them |
+### Test workflow
 
-I kept them separate on purpose. Anything that reads secrets must never run for a pull request, and anything that runs for pull requests must never see a secret. The pipeline workflow also masks the pieces of the database connection string (host, user, project reference) so a connection error can't leak them into a public log, and a concurrency rule stops two loads from running at once.
+Runs on every push and pull request. It:
 
-**Docker.** The pipeline has a multi-stage Dockerfile. The `test` stage adds pytest and the tests, and CI runs it with the network turned off. The `runtime` stage is the image I would actually run. It runs as a non-root user and has no tests, `.env` files, or generated data, and CI checks each of those on every push. CI builds and checks the image but doesn't run the pipeline in it or push it anywhere. The weekly workflow runs the Python scripts directly, not through the container.
+- runs the test suite
+- runs database tests against a throwaway PostgreSQL container
+- fails if database tests are unexpectedly skipped, since a skipped test looks green but proves nothing
+- builds and checks the Docker image
+- uses no repository secrets
 
-## Problems I hit and how I solved them
+### Pipeline workflow
 
-- **401 from Contentful.** The Space ID loaded correctly, so I suspected the credentials, not the request. The cause was the wrong token type: the Content Delivery API only accepts its own token. Lesson: when the URL is right, test credentials in isolation.
-- **Group IDs becoming decimals.** pandas turns an integer column with gaps into floats (9 becomes 9.0), which would break the join to the group table. I converted it to a nullable integer type, and the loader converts it to a plain whole number before writing.
-- **My assumptions didn't match the data.** The project brief said 435 entries, history from October 2024, and group data for only a few months. The data had more than 440 entries from September 2025, and every event had a group ID (40 of them the catch-all). I profiled the file before designing, so the design followed the data and not the brief.
-- **`updated_at` is useless for "recently changed".** In the 440-event snapshot, 298 of 440 rows shared one date (a bulk edit on 2026-11-01), so I based recency on `created_at` instead.
-- **Supabase connection string.** Supabase offers a direct connection and a pooled one. I used the session pooler, which needs a username that includes the project reference (`postgres.<project-ref>`), because the direct address may not be reachable from IPv4-only networks such as GitHub Actions runners. The read-only API user follows the same pattern (`api_reader.<project-ref>`).
+Runs every Friday night (Central time) and can also be started manually, with an optional dry run. It:
+
+1. runs the non-database tests
+2. extracts the current Contentful data
+3. transforms and validates it
+4. loads PostgreSQL
+5. fails if any row was rejected
+6. writes a run summary
+7. stores the raw and clean files as artifacts for 30 days
+
+**Pull-request code should never have access to real credentials.** That was one of the most important design decisions in the project. The pipeline workflow also masks pieces of the database connection string so a connection error can't leak them into a public log, and a concurrency rule stops two loads from running at once.
+
+### Docker
+
+The pipeline has a multi-stage Dockerfile. The runtime image runs as a non-root user and contains no tests, `.env` files or generated data. CI verifies each of those on every push. The image is built and checked in CI but is not yet used by the weekly run, which executes the Python scripts directly.
+
+---
+
+# 7. API and dashboard
+
+A read-only FastAPI service sits on top of the warehouse. Its database user has `SELECT` access only, so a bug or malformed request cannot modify the warehouse.
+
+The main endpoints provide paginated events, a single event, events per month, events per category, events by start hour, recent activity by group and by category, and health status. "Trending" means event counts over a recent window (90 days by default), because the source has no RSVP numbers and popularity can't be measured.
+
+The dashboard is a Next.js application that answers the four questions the warehouse was designed around. It fetches from the API in Server Components, so the browser never calls the API directly. Each chart handles its own error and empty states and notes the limits of its data.
+
+---
+
+# 8. Engineering decisions that mattered
+
+The most important decisions were not the choice of frameworks. They were decisions about **what the data meant and how the system should behave when something went wrong.**
+
+### Keep the raw snapshot
+Raw API data is preserved before transformation, so cleaning rules can be changed and re-run without hitting the source API again.
+
+### Use the source event ID
+The source ID is a stable key for upserts and duplicate protection.
+
+### Don't invent missing data
+I removed RSVP-based questions because the source held registration links, not attendance counts.
+
+### Model the catch-all honestly
+"Random Group" is the source's catch-all for events without a real group. I kept it as a real source value and added an `is_catch_all` flag so group rankings can exclude it without hard-coding an ID.
+
+### Keep the API narrow
+The API is built around the dashboard's actual needs, not every warehouse field.
+
+### Use a read-only database account
+The API only needs `SELECT`, so it has no permission to modify data.
+
+### Separate trusted and untrusted execution
+Tests run on pull requests without secrets. The pipeline that reads secrets runs only on a schedule or by hand.
+
+---
+
+# 9. How I worked with AI
+
+I used AI coding tools as implementation assistance, not as the decision-maker. I defined the analytical questions and schema decisions, used Claude Code to profile the data and help draft the code, then reviewed the output against my own audit.
+
+Several decisions were mine and changed the implementation:
+
+- I rejected RSVP as a meaningful metric.
+- I identified "Random Group" as a catch-all, not a real organization.
+- I corrected the `23:59` source value instead of adding a transformation rule.
+- I chose to keep `dim_date` and to preserve removed events with `is_active`.
+- I defined what "trending" means for this dataset.
+- I limited the API to what the dashboard needs.
+- I chose Next.js after trying Power BI and not getting on with its workflow.
+- I ran the load twice against the hosted database to verify the re-run behavior myself.
+
+The important part was not generating code quickly. It was **reviewing the output against the data and overriding the implementation when the evidence required it.**
+
+---
+
+# 10. What I learned
+
+### Profile the data before designing the pipeline
+Several assumptions in my original project brief were wrong. Measuring the real data early kept them from becoming architecture.
+
+### Test behavior, not just code paths
+Loading the same data twice and checking that no duplicates appear proves more than checking that an upsert function exists.
+
+### A successful process can still produce a bad result
+The rejected-row gate exists because a job that exits cleanly can still leave incomplete output.
+
+### What I'd do differently
+Write the tests and schedule the pipeline from the start, not after the first manual loads. Doing so would have caught problems sooner and kept the warehouse current from the first week.
+
+---
+
+# 11. Limitations and next steps
+
+This project is intentionally not presented as a finished production platform.
+
+- The warehouse refreshes weekly, not continuously. GitHub disables scheduled workflows after 60 days without repository activity, and the free Supabase project can pause when idle. Either one stops the weekly load until I re-enable it.
+- RSVP or attendance data isn't available, so "trending" shows where organizers put their events, not what attendees choose.
+- About 9% of events have no real group, so group rankings should show their coverage.
+- Historical data begins in September 2025.
+- Only a start time is stored, with no end time, venue or address.
+- Removed-event handling is implemented but hasn't been exercised against a real removal.
+- Tests cover the pipeline only, not the API or dashboard.
+- The Docker image is not used by the weekly run.
+- There is no alerting beyond a failed GitHub Actions run.
+
+### Next
+
+1. Add API tests.
+2. Add a Power BI report on the same warehouse.
+3. Run the weekly pipeline from the Docker image, or remove the unused image.
+4. Add stronger operational alerting.
+5. Consider Contentful's Sync API for incremental loads and explicit deletions.
+
+---
+
+# Technical appendix
+
+The sections below are for readers who want implementation-level detail.
+
+## Data audit
+
+The first audit covered 435 entries from the 2026-10-29 snapshot. The latest snapshot has 450.
+
+- **Event type:** 6 distinct values where 3 were expected. 38 of 435 rows (about 9%) needed normalization. The latest run standardized 39 values.
+- **Event category:** 9 distinct values where 7 were expected. `WORKSHOP` and `Tech TalkNetworking` (two categories run together) were the errors. I mapped the second to "Tech Talk", a judgment call I documented.
+- **Time:** 41 distinct representations in the first audit, 30 after normalizing to `HH:MM`. The latest run standardized 18 values.
+- **Groups:** 30 source groups, all used. 410 of 450 events (91.1%) have a real group.
+- **RSVP:** 424 URLs and 16 `TBD` values, so attendance analytics were removed from the design.
+- **Repeated names:** 3 pairs of events shared a name and date but had different IDs. I confirmed they are separate events and kept all of them.
+
+## Warehouse schema
+
+| Table | Rows | Purpose |
+|---|---|---|
+| `fact_events` | 450 | One row per event |
+| `dim_event_type` | 3 | In-Person, Virtual, Hybrid |
+| `dim_event_category` | 7 | Networking, Tech Talk, Workshop, Entrepreneur, Conference, Hackathon, AI |
+| `dim_group` | 30 | Community groups plus the catch-all flag |
+| `dim_date` | 3,774 | Calendar days from 2025-09-01 to 2035-12-31 |
+
+## API
+
+| Endpoint | Purpose |
+|---|---|
+| `GET /events` | Paginated events with optional filters |
+| `GET /events/{event_id}` | Single event |
+| `GET /stats/events-per-month` | Monthly event counts |
+| `GET /stats/events-per-category` | Category counts |
+| `GET /stats/events-per-hour` | Event counts by start hour |
+| `GET /trending/groups` | Active groups over a recent window |
+| `GET /trending/categories` | Active categories over a recent window |
+| `GET /health` | Database connectivity check |
+
+The API returns a deliberately small event shape because the dashboard is its only consumer.
+
+## Problems I hit
+
+### Contentful returned a 401
+The Space ID was correct, so I tested the credentials separately from the request. The cause was the wrong token type: the Content Delivery API only accepts its own token.
+
+### pandas converted group IDs to decimals
+Because the group column had gaps, pandas turned integer IDs into floats such as `9.0`, which would break the join to the group table. I converted the column to a nullable integer type, and the loader converts it to a whole number before writing.
+
+### The project brief didn't match the data
+The brief described 435 entries, history from October 2024, and sparse group data. The data had more than 440 entries from September 2025, with a group ID on every event and 40 using the catch-all. The design follows the measured data, not the brief.
+
+### `updated_at` wasn't useful for recency
+A bulk edit made 298 of 440 records share one `updated_at` date, so I used `created_at` instead.
+
+### Supabase connection details
+GitHub Actions runners are IPv4-only, so I used the Supabase session pooler, which needs a username that includes the project reference (`postgres.<project-ref>`). The read-only API user follows the same pattern.
+
